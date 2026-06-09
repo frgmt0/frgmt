@@ -32,7 +32,17 @@ uniform vec2 uHalf;
 uniform vec3 uB[N];
 uniform float uR[N];
 uniform vec2 uMouse;
+uniform float uTime;
 uniform sampler2D uEnv;
+
+// surface-tension ripples + dents — keeps the skin from reading as
+// mathematically perfect, which is what sells molten metal
+float ripple(vec3 p) {
+  float n = sin(p.x * 9.0 + uTime * 0.7) * sin(p.y * 8.0 - uTime * 0.9) * sin(p.z * 7.0 + uTime * 0.5);
+  n += 0.55 * sin(p.x * 17.0 - uTime * 1.3) * sin(p.y * 15.0 + uTime * 1.1);
+  n += 0.3 * sin((p.x + p.y) * 26.0 + uTime * 1.9);
+  return n;
+}
 
 float map(vec3 p) {
   float d = 1e5;
@@ -41,7 +51,7 @@ float map(vec3 p) {
     float h = clamp(0.5 + 0.5 * (d - di) / 0.42, 0.0, 1.0);
     d = mix(d, di, h) - 0.42 * h * (1.0 - h);
   }
-  return d;
+  return d + ripple(p) * 0.016;
 }
 
 vec3 getNormal(vec3 p) {
@@ -174,6 +184,7 @@ export default memo(function Ferrofluid() {
       balls: gl.getUniformLocation(prog, "uB[0]"),
       radii: gl.getUniformLocation(prog, "uR[0]"),
       mouse: gl.getUniformLocation(prog, "uMouse"),
+      time: gl.getUniformLocation(prog, "uTime"),
       env: gl.getUniformLocation(prog, "uEnv"),
     };
 
@@ -202,6 +213,8 @@ export default memo(function Ferrofluid() {
     let t = 0;
     let mx = -1e4;
     let my = -1e4;
+    let pvx = 0; // pointer velocity, px/frame-ish
+    let pvy = 0;
     let parts: P[] = [];
     let cx = 0;
     let cy = 0;
@@ -214,13 +227,15 @@ export default memo(function Ferrofluid() {
       const base = Math.min(w, h) * 0.135;
       parts = Array.from({ length: N }, (_, i) => {
         const a = (i / N) * Math.PI * 2;
-        const rest = base * (0.55 + Math.random() * 0.5);
+        // wildly uneven rest shape — the idle blob is already a lump,
+        // never a circle
+        const rest = base * (0.3 + Math.random() * 1.0);
         return {
           x: cx + Math.cos(a) * rest,
           y: cy + Math.sin(a) * rest,
           vx: 0,
           vy: 0,
-          r: base * (0.5 + Math.random() * 0.35),
+          r: base * (0.38 + Math.random() * 0.52),
           a,
           rest,
           wob: Math.random() * Math.PI * 2,
@@ -231,32 +246,74 @@ export default memo(function Ferrofluid() {
 
     const step = () => {
       t += 1;
-      const drift = Math.min(w, h) * 0.022;
-      const acx = cx + Math.sin(t * 0.005) * drift;
-      const acy = cy + Math.cos(t * 0.0037) * drift * 0.7;
-      const R = Math.min(w, h) * 0.45;
+      const m = Math.min(w, h);
+      const drift = m * 0.05;
+      let acx = cx + Math.sin(t * 0.005) * drift + Math.sin(t * 0.0023 + 2.1) * drift * 0.7;
+      let acy = cy + Math.cos(t * 0.0037) * drift * 0.8 + Math.cos(t * 0.0019) * drift * 0.5;
+      const R = m * 0.75;
+
+      // the whole mass leans toward the magnet, not just the near surface
+      const adx = mx - acx;
+      const ady = my - acy;
+      const ad = Math.hypot(adx, ady);
+      if (ad < R && ad > 1) {
+        const lean = (1 - ad / R) * m * 0.1;
+        acx += (adx / ad) * lean;
+        acy += (ady / ad) * lean;
+      }
 
       for (const p of parts) {
-        const wob = 1 + 0.16 * Math.sin(t * 0.013 + p.wob);
-        const txp = acx + Math.cos(p.a + t * 0.0022) * p.rest * wob;
-        const typ = acy + Math.sin(p.a + t * 0.0022) * p.rest * wob;
-        p.vx += (txp - p.x) * 0.012;
-        p.vy += (typ - p.y) * 0.012;
+        // deeper breathing, looser orbit
+        const wob = 1 + 0.34 * Math.sin(t * 0.013 + p.wob);
+        const txp = acx + Math.cos(p.a + t * 0.0032) * p.rest * wob;
+        const typ = acy + Math.sin(p.a + t * 0.0032) * p.rest * wob;
+        p.vx += (txp - p.x) * 0.007;
+        p.vy += (typ - p.y) * 0.007;
 
+        // long-range magnet with a violent close-range ramp
         const dx = mx - p.x;
         const dy = my - p.y;
         const d = Math.hypot(dx, dy);
         if (d < R && d > 1) {
-          const pull = (1 - d / R) ** 2 * 1.15;
+          const pull = (1 - d / R) ** 1.6 * 2.6;
           p.vx += (dx / d) * pull;
           p.vy += (dy / d) * pull;
+          // fast swipes fling the fluid — splash, don't just attract
+          p.vx += pvx * (1 - d / R) * 0.18;
+          p.vy += pvy * (1 - d / R) * 0.18;
         }
 
-        p.vx *= 0.9;
-        p.vy *= 0.9;
+        p.vx *= 0.93;
+        p.vy *= 0.93;
         p.x += p.vx;
         p.y += p.vy;
       }
+
+      // mutual repulsion: conserves apparent volume when the magnet drags
+      // everything one way, and keeps the lumps lumpy
+      for (let i = 0; i < N; i++) {
+        const a = parts[i];
+        for (let j = i + 1; j < N; j++) {
+          const b = parts[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const min = (a.r + b.r) * 0.66;
+          const d = Math.hypot(dx, dy);
+          if (d < min && d > 0.1) {
+            const f = ((min - d) / min) * 0.5;
+            const ux = (dx / d) * f;
+            const uy = (dy / d) * f;
+            a.vx -= ux;
+            a.vy -= uy;
+            b.vx += ux;
+            b.vy += uy;
+          }
+        }
+      }
+
+      // pointer velocity decays between move events
+      pvx *= 0.8;
+      pvy *= 0.8;
     };
 
     const render = () => {
@@ -265,12 +322,13 @@ export default memo(function Ferrofluid() {
         const p = parts[i];
         ballData[i * 3] = (p.x - w / 2) / S;
         ballData[i * 3 + 1] = -(p.y - h / 2) / S;
-        ballData[i * 3 + 2] = 0.2 * Math.sin(t * 0.012 + p.zw);
+        ballData[i * 3 + 2] = 0.34 * Math.sin(t * 0.014 + p.zw);
         radiusData[i] = p.r / S;
       }
       gl.uniform3fv(loc.balls, ballData);
       gl.uniform1fv(loc.radii, radiusData);
       gl.uniform2f(loc.mouse, (mx - w / 2) / S, -(my - h / 2) / S);
+      gl.uniform1f(loc.time, t * 0.016);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -300,8 +358,16 @@ export default memo(function Ferrofluid() {
 
     const onPointer = (e: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
-      mx = e.clientX - rect.left;
-      my = e.clientY - rect.top;
+      const nx = e.clientX - rect.left;
+      const ny = e.clientY - rect.top;
+      if (mx > -1e3) {
+        // accumulate swipe velocity, clamped so a teleporting cursor
+        // (tab-in, edge re-entry) can't detonate the blob
+        pvx = Math.max(-40, Math.min(40, pvx + (nx - mx) * 0.5));
+        pvy = Math.max(-40, Math.min(40, pvy + (ny - my) * 0.5));
+      }
+      mx = nx;
+      my = ny;
     };
 
     const onVisibility = () => {
