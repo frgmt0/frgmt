@@ -1,0 +1,22 @@
+{
+  "name": "frgmt-xyz",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bunx --bun vite --host 0.0.0.0",
+    "build": "bunx --bun vite build",
+    "preview": "bunx --bun vite preview --host 0.0.0.0",
+    "check": "bunx --bun tsc --noEmit"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "vite": "latest",
+    "typescript": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest"
+  },
+  "devDependencies": {}
+}
