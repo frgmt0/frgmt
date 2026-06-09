@@ -19,11 +19,11 @@ attribute vec2 aPos;
 void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
 `;
 
-// Raymarched liquid chrome: the spring/magnet particle sim feeds metaball
-// centers into an SDF (smooth-min spheres). Surface normals reflect a
-// procedural "studio" environment — banded light pools are what give
-// liquid metal its swirls — plus fresnel, a thin-film iridescent fringe
-// at grazing angles, a key-light ping, and a gleam that follows the cursor.
+// Raymarched liquid chrome. The spring/magnet particle sim feeds metaball
+// centers into a smooth-min SDF; surface normals reflect a real photographic
+// environment — the Poly Haven "empty warehouse" HDRI (CC0), tone-mapped to
+// PNG at build time and re-expanded in-shader. Real ceiling lights and a
+// concrete floor are what make chrome read as chrome.
 const FRAG = `
 precision highp float;
 #define N ${N}
@@ -32,14 +32,14 @@ uniform vec2 uHalf;
 uniform vec3 uB[N];
 uniform float uR[N];
 uniform vec2 uMouse;
-uniform float uTime;
+uniform sampler2D uEnv;
 
 float map(vec3 p) {
   float d = 1e5;
   for (int i = 0; i < N; i++) {
     float di = length(p - uB[i]) - uR[i];
-    float h = clamp(0.5 + 0.5 * (d - di) / 0.34, 0.0, 1.0);
-    d = mix(d, di, h) - 0.34 * h * (1.0 - h);
+    float h = clamp(0.5 + 0.5 * (d - di) / 0.42, 0.0, 1.0);
+    d = mix(d, di, h) - 0.42 * h * (1.0 - h);
   }
   return d;
 }
@@ -53,20 +53,16 @@ vec3 getNormal(vec3 p) {
   ));
 }
 
-vec3 env(vec3 r) {
-  float v = r.y;
-  float a = atan(r.x, r.z);
-  // vertical studio gradient: dark floor, silver sky
-  vec3 col = mix(vec3(0.012, 0.012, 0.018), vec3(0.6, 0.62, 0.68), smoothstep(-0.6, 0.7, v));
-  // bright overhead pool
-  col += vec3(0.55) * smoothstep(0.5, 0.95, v);
-  // swirling light bands — the signature of liquid chrome
-  float band1 = smoothstep(0.45, 0.9, sin(v * 6.5 + a * 2.0));
-  float band2 = smoothstep(0.55, 0.95, sin(v * 11.0 - a * 3.0 + 1.7));
-  col += band1 * vec3(0.5, 0.51, 0.56) + band2 * vec3(0.28);
-  // dark slashes for contrast
-  col *= 0.7 + 0.3 * sin(v * 4.0 + a - 0.8);
-  return col;
+vec3 envSample(vec3 r) {
+  // equirect lookup, yaw-rotated so a photogenic slice faces the camera
+  float u = atan(r.x, -r.z) * 0.15915494 + 0.5 + 0.18;
+  float v = 0.5 - asin(clamp(r.y, -1.0, 1.0)) * 0.31830989;
+  vec3 c = texture2D(uEnv, vec2(u, v)).rgb;
+  // back to ~linear, then re-punch the highlights the tonemap compressed
+  c = pow(c, vec3(2.2));
+  float hot = smoothstep(0.55, 1.0, max(c.r, max(c.g, c.b)));
+  c *= 1.0 + hot * 3.0;
+  return c;
 }
 
 void main() {
@@ -87,40 +83,34 @@ void main() {
   }
 
   if (hit < 0.0) {
-    // thin silver fringe just past the silhouette, doubles as edge AA
-    float aa = smoothstep(0.014, 0.0, dmin) * 0.3;
-    gl_FragColor = vec4(vec3(0.75, 0.77, 0.82) * aa, aa);
+    // thin fringe just past the silhouette, doubles as edge AA
+    float aa = smoothstep(0.012, 0.0, dmin) * 0.25;
+    gl_FragColor = vec4(vec3(0.7, 0.71, 0.74) * aa, aa);
     return;
   }
 
   vec3 p = ro + rd * hit;
   vec3 n = getNormal(p);
   vec3 r = reflect(rd, n);
-  vec3 col = env(r);
+
+  // chrome = the environment, almost verbatim
+  vec3 col = envSample(r) * 0.96;
 
   float ndv = max(dot(n, -rd), 0.0);
   float fr = pow(1.0 - ndv, 3.0);
 
-  // face-on surfaces read dark (mercury reflects the dark room),
-  // tilted surfaces catch the sky — this is what gives the swirl contrast
-  col *= 0.4 + 0.6 * pow(1.0 - ndv, 0.55);
+  // slight grazing-angle lift + a whisper of thin-film color in the rim
+  col *= 1.0 + fr * 0.5;
+  vec3 irid = 0.5 + 0.5 * cos(6.28318 * (fr * 1.4 + vec3(0.0, 0.33, 0.66)));
+  col += irid * fr * 0.08;
 
-  // thin-film iridescence at grazing angles
-  vec3 irid = 0.5 + 0.5 * cos(6.28318 * (fr * 1.6 + vec3(0.0, 0.33, 0.66)));
-  col += irid * fr * 0.4;
-  col = mix(col, col * 1.3, fr);
-
-  // key light ping, upper-left front
-  vec3 L = normalize(vec3(-0.5, 0.7, 0.6));
-  col += vec3(1.0) * pow(max(dot(r, L), 0.0), 48.0) * 1.3;
-
-  // cursor gleam
+  // cursor gleam so the spikes catch light as they reach for the pointer
   vec3 Lm = normalize(vec3(uMouse - p.xy, 0.8));
-  col += vec3(1.0, 0.94, 0.9) * pow(max(dot(n, Lm), 0.0), 36.0) * 0.7;
+  col += vec3(1.0, 0.97, 0.93) * pow(max(dot(n, Lm), 0.0), 40.0) * 0.45;
 
   // exposure + tonemap + gamma
-  col *= 1.5;
-  col = col / (col + 0.8);
+  col *= 1.35;
+  col = col / (col + 1.0);
   col = pow(col, vec3(0.4545));
 
   gl_FragColor = vec4(col, 1.0);
@@ -184,8 +174,25 @@ export default memo(function Ferrofluid() {
       balls: gl.getUniformLocation(prog, "uB[0]"),
       radii: gl.getUniformLocation(prog, "uR[0]"),
       mouse: gl.getUniformLocation(prog, "uMouse"),
-      time: gl.getUniformLocation(prog, "uTime"),
+      env: gl.getUniformLocation(prog, "uEnv"),
     };
+
+    // environment texture — render starts once the warehouse is in VRAM
+    let envReady = false;
+    const tex = gl.createTexture();
+    const img = new Image();
+    img.onload = () => {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.uniform1i(loc.env, 0);
+      envReady = true;
+      if (reduced) render();
+    };
+    img.src = "/warehouse.png";
 
     // --- simulation state ---
     let w = 0;
@@ -204,7 +211,7 @@ export default memo(function Ferrofluid() {
     const seed = () => {
       cx = w * 0.5;
       cy = h * 0.4;
-      const base = Math.min(w, h) * 0.13;
+      const base = Math.min(w, h) * 0.135;
       parts = Array.from({ length: N }, (_, i) => {
         const a = (i / N) * Math.PI * 2;
         const rest = base * (0.55 + Math.random() * 0.5);
@@ -253,6 +260,7 @@ export default memo(function Ferrofluid() {
     };
 
     const render = () => {
+      if (!envReady) return;
       for (let i = 0; i < N; i++) {
         const p = parts[i];
         ballData[i * 3] = (p.x - w / 2) / S;
@@ -263,7 +271,6 @@ export default memo(function Ferrofluid() {
       gl.uniform3fv(loc.balls, ballData);
       gl.uniform1fv(loc.radii, radiusData);
       gl.uniform2f(loc.mouse, (mx - w / 2) / S, -(my - h / 2) / S);
-      gl.uniform1f(loc.time, t * 0.016);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
