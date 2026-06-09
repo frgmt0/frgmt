@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import Ferrofluid from "./Ferrofluid";
 import FragmentField from "./FragmentField";
 import { fallbackRepos, type Repo } from "./repos";
 
@@ -207,6 +208,7 @@ export default function App() {
         </header>
 
         <section className="hero" aria-label="Introduction">
+          <Ferrofluid />
           <h1 className="shard">
             <span className="shard-sizer">frgmt</span>
             <span className="shard-layer shard-ghost" aria-hidden="true">
