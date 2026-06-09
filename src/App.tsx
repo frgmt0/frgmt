@@ -107,9 +107,6 @@ export default function App() {
     return [...groups.entries()].sort((a, b) => b[0] - a[0]);
   }, [sorted]);
 
-  const totalStars = useMemo(() => sorted.reduce((s, r) => s + r.stars, 0), [sorted]);
-  const last = sorted[0];
-
   // Scene engine: one rAF loop drives pointer parallax (--px/--py on :root),
   // per-row focal depth (--f), the depth gauge (--depth), and the rail's
   // current-stratum label. Direct DOM writes — no React state per frame.
@@ -210,26 +207,6 @@ export default function App() {
         </header>
 
         <section className="hero" aria-label="Introduction">
-          <div className="hero-kicker">
-            <p className="hero-id">ro_frgmt · developer · los angeles</p>
-            <p className="hero-line">
-              Every public repo from{" "}
-              <a href="https://github.com/frgmt0">github.com/frgmt0</a> — newest at the
-              surface. Dig down for the older strata.
-            </p>
-          </div>
-
-          <div className="hero-stats" aria-label="Index totals">
-            <span>{sorted.length} fragments</span>
-            <span>{totalStars} stars</span>
-            {last && (
-              <span>
-                last push {formatDate(last.updated_at)} ·{" "}
-                <a href={last.url}>{last.name}</a>
-              </span>
-            )}
-          </div>
-
           <h1 className="shard">
             <span className="shard-sizer">frgmt</span>
             <span className="shard-layer shard-ghost" aria-hidden="true">
