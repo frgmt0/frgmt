@@ -5,57 +5,208 @@ type P = {
   y: number;
   vx: number;
   vy: number;
-  r: number; // metaball radius
+  r: number; // metaball radius (px)
   a: number; // rest angle around the anchor
   rest: number; // rest distance from the anchor
   wob: number; // wobble phase
+  zw: number; // z-wobble phase
 };
 
-// Metaball ferrofluid: a ring of spring-anchored particles whose summed
-// field is thresholded into one gooey mass. The pointer is the magnet —
-// nearby particles get pulled out of the surface into spikes.
-//
-// Shaded as liquid metal: surface normals come from the field gradient,
-// then a fake environment does the rest — sky reflection from above,
-// fresnel brightening at grazing edges, a hard key-light specular, and
-// a gleam that tracks the cursor. Rendered into a low-res buffer and
-// upscaled with smoothing for soft edges.
+const N = 13;
+
+const VERT = `
+attribute vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+`;
+
+// Raymarched liquid chrome: the spring/magnet particle sim feeds metaball
+// centers into an SDF (smooth-min spheres). Surface normals reflect a
+// procedural "studio" environment — banded light pools are what give
+// liquid metal its swirls — plus fresnel, a thin-film iridescent fringe
+// at grazing angles, a key-light ping, and a gleam that follows the cursor.
+const FRAG = `
+precision highp float;
+#define N ${N}
+uniform vec2 uRes;
+uniform vec2 uHalf;
+uniform vec3 uB[N];
+uniform float uR[N];
+uniform vec2 uMouse;
+uniform float uTime;
+
+float map(vec3 p) {
+  float d = 1e5;
+  for (int i = 0; i < N; i++) {
+    float di = length(p - uB[i]) - uR[i];
+    float h = clamp(0.5 + 0.5 * (d - di) / 0.34, 0.0, 1.0);
+    d = mix(d, di, h) - 0.34 * h * (1.0 - h);
+  }
+  return d;
+}
+
+vec3 getNormal(vec3 p) {
+  vec2 e = vec2(0.005, 0.0);
+  return normalize(vec3(
+    map(p + e.xyy) - map(p - e.xyy),
+    map(p + e.yxy) - map(p - e.yxy),
+    map(p + e.yyx) - map(p - e.yyx)
+  ));
+}
+
+vec3 env(vec3 r) {
+  float v = r.y;
+  float a = atan(r.x, r.z);
+  // vertical studio gradient: dark floor, silver sky
+  vec3 col = mix(vec3(0.012, 0.012, 0.018), vec3(0.6, 0.62, 0.68), smoothstep(-0.6, 0.7, v));
+  // bright overhead pool
+  col += vec3(0.55) * smoothstep(0.5, 0.95, v);
+  // swirling light bands — the signature of liquid chrome
+  float band1 = smoothstep(0.45, 0.9, sin(v * 6.5 + a * 2.0));
+  float band2 = smoothstep(0.55, 0.95, sin(v * 11.0 - a * 3.0 + 1.7));
+  col += band1 * vec3(0.5, 0.51, 0.56) + band2 * vec3(0.28);
+  // dark slashes for contrast
+  col *= 0.7 + 0.3 * sin(v * 4.0 + a - 0.8);
+  return col;
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy / uRes * 2.0 - 1.0) * uHalf;
+  vec3 ro = vec3(uv, 3.0);
+  vec3 rd = vec3(0.0, 0.0, -1.0);
+
+  float t = 0.0;
+  float dmin = 1e5;
+  float hit = -1.0;
+  for (int i = 0; i < 72; i++) {
+    vec3 p = ro + rd * t;
+    float d = map(p);
+    dmin = min(dmin, d);
+    if (d < 0.0015) { hit = t; break; }
+    t += max(d * 0.9, 0.004);
+    if (t > 6.0) break;
+  }
+
+  if (hit < 0.0) {
+    // thin silver fringe just past the silhouette, doubles as edge AA
+    float aa = smoothstep(0.014, 0.0, dmin) * 0.3;
+    gl_FragColor = vec4(vec3(0.75, 0.77, 0.82) * aa, aa);
+    return;
+  }
+
+  vec3 p = ro + rd * hit;
+  vec3 n = getNormal(p);
+  vec3 r = reflect(rd, n);
+  vec3 col = env(r);
+
+  float ndv = max(dot(n, -rd), 0.0);
+  float fr = pow(1.0 - ndv, 3.0);
+
+  // face-on surfaces read dark (mercury reflects the dark room),
+  // tilted surfaces catch the sky — this is what gives the swirl contrast
+  col *= 0.4 + 0.6 * pow(1.0 - ndv, 0.55);
+
+  // thin-film iridescence at grazing angles
+  vec3 irid = 0.5 + 0.5 * cos(6.28318 * (fr * 1.6 + vec3(0.0, 0.33, 0.66)));
+  col += irid * fr * 0.4;
+  col = mix(col, col * 1.3, fr);
+
+  // key light ping, upper-left front
+  vec3 L = normalize(vec3(-0.5, 0.7, 0.6));
+  col += vec3(1.0) * pow(max(dot(r, L), 0.0), 48.0) * 1.3;
+
+  // cursor gleam
+  vec3 Lm = normalize(vec3(uMouse - p.xy, 0.8));
+  col += vec3(1.0, 0.94, 0.9) * pow(max(dot(n, Lm), 0.0), 36.0) * 0.7;
+
+  // exposure + tonemap + gamma
+  col *= 1.5;
+  col = col / (col + 0.8);
+  col = pow(col, vec3(0.4545));
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
 export default memo(function Ferrofluid() {
   const ref = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const gl = canvas.getContext("webgl", {
+      alpha: true,
+      premultipliedAlpha: false,
+      antialias: false,
+      depth: false,
+      stencil: false,
+    });
+    if (!gl) return; // no WebGL — the hero just stays atmospheric
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const SCALE = 6; // field buffer is 1/6 resolution
+    // --- GL setup ---
+    const compile = (type: number, src: string) => {
+      const sh = gl.createShader(type)!;
+      gl.shaderSource(sh, src);
+      gl.compileShader(sh);
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(sh));
+        return null;
+      }
+      return sh;
+    };
+    const vs = compile(gl.VERTEX_SHADER, VERT);
+    const fs = compile(gl.FRAGMENT_SHADER, FRAG);
+    if (!vs || !fs) return;
+    const prog = gl.createProgram()!;
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error(gl.getProgramInfoLog(prog));
+      return;
+    }
+    gl.useProgram(prog);
+
+    const quad = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([-1, -1, 3, -1, -1, 3]),
+      gl.STATIC_DRAW
+    );
+    const aPos = gl.getAttribLocation(prog, "aPos");
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+    const loc = {
+      res: gl.getUniformLocation(prog, "uRes"),
+      half: gl.getUniformLocation(prog, "uHalf"),
+      balls: gl.getUniformLocation(prog, "uB[0]"),
+      radii: gl.getUniformLocation(prog, "uR[0]"),
+      mouse: gl.getUniformLocation(prog, "uMouse"),
+      time: gl.getUniformLocation(prog, "uTime"),
+    };
+
+    // --- simulation state ---
     let w = 0;
     let h = 0;
-    let bw = 0;
-    let bh = 0;
+    let S = 1; // px → scene-unit divisor
     let raf = 0;
     let t = 0;
-    let buffer: ImageData | null = null;
-    let field: Float32Array | null = null;
-    const off = document.createElement("canvas");
-    const offCtx = off.getContext("2d");
-    if (!offCtx) return;
-
     let mx = -1e4;
     let my = -1e4;
     let parts: P[] = [];
     let cx = 0;
     let cy = 0;
+    const ballData = new Float32Array(N * 3);
+    const radiusData = new Float32Array(N);
 
     const seed = () => {
       cx = w * 0.5;
       cy = h * 0.4;
-      const base = Math.min(w, h) * 0.12;
-      const n = 13;
-      parts = Array.from({ length: n }, (_, i) => {
-        const a = (i / n) * Math.PI * 2;
+      const base = Math.min(w, h) * 0.13;
+      parts = Array.from({ length: N }, (_, i) => {
+        const a = (i / N) * Math.PI * 2;
         const rest = base * (0.55 + Math.random() * 0.5);
         return {
           x: cx + Math.cos(a) * rest,
@@ -66,6 +217,7 @@ export default memo(function Ferrofluid() {
           a,
           rest,
           wob: Math.random() * Math.PI * 2,
+          zw: Math.random() * Math.PI * 2,
         };
       });
     };
@@ -78,14 +230,12 @@ export default memo(function Ferrofluid() {
       const R = Math.min(w, h) * 0.45;
 
       for (const p of parts) {
-        // breathing rest shape, slowly rotating
         const wob = 1 + 0.16 * Math.sin(t * 0.013 + p.wob);
         const txp = acx + Math.cos(p.a + t * 0.0022) * p.rest * wob;
         const typ = acy + Math.sin(p.a + t * 0.0022) * p.rest * wob;
         p.vx += (txp - p.x) * 0.012;
         p.vy += (typ - p.y) * 0.012;
 
-        // the magnet — closest particles spike hardest
         const dx = mx - p.x;
         const dy = my - p.y;
         const d = Math.hypot(dx, dy);
@@ -103,121 +253,40 @@ export default memo(function Ferrofluid() {
     };
 
     const render = () => {
-      if (!buffer || !field) return;
-
-      // pass 1: scalar field
-      let fi = 0;
-      for (let y = 0; y < bh; y++) {
-        const py = (y + 0.5) * SCALE;
-        for (let x = 0; x < bw; x++) {
-          const px = (x + 0.5) * SCALE;
-          let f = 0;
-          for (const p of parts) {
-            const dx = px - p.x;
-            const dy = py - p.y;
-            f += (p.r * p.r) / (dx * dx + dy * dy + 1);
-          }
-          field[fi++] = f;
-        }
+      for (let i = 0; i < N; i++) {
+        const p = parts[i];
+        ballData[i * 3] = (p.x - w / 2) / S;
+        ballData[i * 3 + 1] = -(p.y - h / 2) / S;
+        ballData[i * 3 + 2] = 0.2 * Math.sin(t * 0.012 + p.zw);
+        radiusData[i] = p.r / S;
       }
-
-      // pass 2: chrome shading from field gradient
-      const data = buffer.data;
-      const gleamR = Math.min(w, h) * 0.6;
-      // key light, upper-left, normalized
-      const lx = -0.45;
-      const ly = -0.6;
-      const lz = 0.66;
-      const GS = 1.5; // gradient → normal strength
-      let idx = 0;
-      for (let y = 0; y < bh; y++) {
-        for (let x = 0; x < bw; x++, idx += 4) {
-          const i = y * bw + x;
-          const f = field[i];
-          if (f <= 0.9) {
-            data[idx + 3] = 0;
-            continue;
-          }
-          const xm = field[x > 0 ? i - 1 : i];
-          const xp = field[x < bw - 1 ? i + 1 : i];
-          const ym = field[y > 0 ? i - bw : i];
-          const yp = field[y < bh - 1 ? i + bw : i];
-          let nx = (xm - xp) * GS;
-          let ny = (ym - yp) * GS;
-          let nz = 0.35;
-          const inv = 1 / Math.sqrt(nx * nx + ny * ny + nz * nz);
-          nx *= inv;
-          ny *= inv;
-          nz *= inv;
-
-          // key-light specular, ~n·l^18 via squaring
-          let s = nx * lx + ny * ly + nz * lz;
-          if (s < 0) s = 0;
-          const s2 = s * s;
-          const s4 = s2 * s2;
-          const s8 = s4 * s4;
-          const spec = s8 * s8 * s2;
-
-          // cursor gleam, tighter lobe with distance falloff
-          const pxs = (x + 0.5) * SCALE;
-          const pys = (y + 0.5) * SCALE;
-          const gxd = mx - pxs;
-          const gyd = my - pys;
-          const gd = Math.sqrt(gxd * gxd + gyd * gyd) + 1e-3;
-          const gz = 170;
-          const gi = 1 / Math.sqrt(gd * gd + gz * gz);
-          let gs = nx * gxd * gi + ny * gyd * gi + nz * gz * gi;
-          if (gs < 0) gs = 0;
-          const g2 = gs * gs;
-          const g4 = g2 * g2;
-          const g8 = g4 * g4;
-          const gspec = g8 * g8 * g8 * Math.max(0, 1 - gd / gleamR);
-
-          // environment: sky from above + fresnel at grazing edges
-          const sky = 0.3 + 0.42 * Math.max(0, -ny) + 0.07 * nx;
-          const fres = (1 - nz) * (1 - nz);
-          const base = 14 + sky * 132 + fres * 128;
-          const sp = spec * 225 + gspec * 255;
-
-          // cool mercury cast, faint ember pickup in the fresnel rim
-          let r = base * 0.94 + fres * 24 + sp;
-          let g = base * 0.97 + fres * 8 + sp;
-          let b = base * 1.06 + sp * 1.04;
-          if (r > 255) r = 255;
-          if (g > 255) g = 255;
-          if (b > 255) b = 255;
-          data[idx] = r;
-          data[idx + 1] = g;
-          data[idx + 2] = b;
-          data[idx + 3] = f < 1 ? ((f - 0.9) * 2550) | 0 : 255;
-        }
-      }
-      offCtx.putImageData(buffer, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(off, 0, 0, bw, bh, 0, 0, w, h);
+      gl.uniform3fv(loc.balls, ballData);
+      gl.uniform1fv(loc.radii, radiusData);
+      gl.uniform2f(loc.mouse, (mx - w / 2) / S, -(my - h / 2) / S);
+      gl.uniform1f(loc.time, t * 0.016);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
 
     const frame = () => {
       raf = requestAnimationFrame(frame);
-      // hero scrolled out of view — keep physics idle-cheap, skip pixels
       const rect = canvas.getBoundingClientRect();
-      if (rect.bottom < 0) return;
+      if (rect.bottom < 0) return; // hero scrolled away
       step();
       render();
     };
 
     const resize = () => {
+      const dpr = Math.min(1.5, window.devicePixelRatio || 1);
       w = canvas.clientWidth;
       h = canvas.clientHeight;
-      canvas.width = w;
-      canvas.height = h;
-      bw = Math.max(2, Math.ceil(w / SCALE));
-      bh = Math.max(2, Math.ceil(h / SCALE));
-      off.width = bw;
-      off.height = bh;
-      buffer = offCtx.createImageData(bw, bh);
-      field = new Float32Array(bw * bh);
+      canvas.width = Math.max(2, Math.floor(w * dpr));
+      canvas.height = Math.max(2, Math.floor(h * dpr));
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      S = Math.min(w, h) * 0.3;
+      gl.uniform2f(loc.res, canvas.width, canvas.height);
+      gl.uniform2f(loc.half, w / (2 * S), h / (2 * S));
       seed();
       if (reduced) render();
     };
