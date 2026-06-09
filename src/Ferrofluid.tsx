@@ -13,8 +13,13 @@ type P = {
 
 // Metaball ferrofluid: a ring of spring-anchored particles whose summed
 // field is thresholded into one gooey mass. The pointer is the magnet —
-// nearby particles get pulled out of the surface into spikes. Rendered
-// into a low-res field buffer, upscaled with smoothing for soft edges.
+// nearby particles get pulled out of the surface into spikes.
+//
+// Shaded as liquid metal: surface normals come from the field gradient,
+// then a fake environment does the rest — sky reflection from above,
+// fresnel brightening at grazing edges, a hard key-light specular, and
+// a gleam that tracks the cursor. Rendered into a low-res buffer and
+// upscaled with smoothing for soft edges.
 export default memo(function Ferrofluid() {
   const ref = useRef<HTMLCanvasElement | null>(null);
 
@@ -33,6 +38,7 @@ export default memo(function Ferrofluid() {
     let raf = 0;
     let t = 0;
     let buffer: ImageData | null = null;
+    let field: Float32Array | null = null;
     const off = document.createElement("canvas");
     const offCtx = off.getContext("2d");
     if (!offCtx) return;
@@ -44,9 +50,9 @@ export default memo(function Ferrofluid() {
     let cy = 0;
 
     const seed = () => {
-      cx = w * 0.6;
-      cy = h * 0.42;
-      const base = Math.min(w, h) * 0.115;
+      cx = w * 0.5;
+      cy = h * 0.4;
+      const base = Math.min(w, h) * 0.12;
       const n = 13;
       parts = Array.from({ length: n }, (_, i) => {
         const a = (i / n) * Math.PI * 2;
@@ -97,10 +103,10 @@ export default memo(function Ferrofluid() {
     };
 
     const render = () => {
-      if (!buffer) return;
-      const data = buffer.data;
-      const rimR = Math.min(w, h) * 0.55;
-      let idx = 0;
+      if (!buffer || !field) return;
+
+      // pass 1: scalar field
+      let fi = 0;
       for (let y = 0; y < bh; y++) {
         const py = (y + 0.5) * SCALE;
         for (let x = 0; x < bw; x++) {
@@ -111,34 +117,79 @@ export default memo(function Ferrofluid() {
             const dy = py - p.y;
             f += (p.r * p.r) / (dx * dx + dy * dy + 1);
           }
-          let r = 0;
-          let g = 0;
-          let b = 0;
-          let a = 0;
-          if (f > 1) {
-            // ink fill, a hair darker than the page
-            r = 8;
-            g = 7;
-            b = 6;
-            a = 255;
-          } else if (f > 0.74) {
-            // ember rim light, brighter on the magnetized side
-            let k = (f - 0.74) / 0.26;
-            k *= k;
-            const dmx = px - mx;
-            const dmy = py - my;
-            const dm = Math.hypot(dmx, dmy);
-            const facing = Math.max(0.18, 1 - dm / rimR);
-            r = 212;
-            g = 122;
-            b = 72;
-            a = Math.min(255, Math.floor(k * facing * 235));
+          field[fi++] = f;
+        }
+      }
+
+      // pass 2: chrome shading from field gradient
+      const data = buffer.data;
+      const gleamR = Math.min(w, h) * 0.6;
+      // key light, upper-left, normalized
+      const lx = -0.45;
+      const ly = -0.6;
+      const lz = 0.66;
+      const GS = 1.5; // gradient → normal strength
+      let idx = 0;
+      for (let y = 0; y < bh; y++) {
+        for (let x = 0; x < bw; x++, idx += 4) {
+          const i = y * bw + x;
+          const f = field[i];
+          if (f <= 0.9) {
+            data[idx + 3] = 0;
+            continue;
           }
+          const xm = field[x > 0 ? i - 1 : i];
+          const xp = field[x < bw - 1 ? i + 1 : i];
+          const ym = field[y > 0 ? i - bw : i];
+          const yp = field[y < bh - 1 ? i + bw : i];
+          let nx = (xm - xp) * GS;
+          let ny = (ym - yp) * GS;
+          let nz = 0.35;
+          const inv = 1 / Math.sqrt(nx * nx + ny * ny + nz * nz);
+          nx *= inv;
+          ny *= inv;
+          nz *= inv;
+
+          // key-light specular, ~n·l^18 via squaring
+          let s = nx * lx + ny * ly + nz * lz;
+          if (s < 0) s = 0;
+          const s2 = s * s;
+          const s4 = s2 * s2;
+          const s8 = s4 * s4;
+          const spec = s8 * s8 * s2;
+
+          // cursor gleam, tighter lobe with distance falloff
+          const pxs = (x + 0.5) * SCALE;
+          const pys = (y + 0.5) * SCALE;
+          const gxd = mx - pxs;
+          const gyd = my - pys;
+          const gd = Math.sqrt(gxd * gxd + gyd * gyd) + 1e-3;
+          const gz = 170;
+          const gi = 1 / Math.sqrt(gd * gd + gz * gz);
+          let gs = nx * gxd * gi + ny * gyd * gi + nz * gz * gi;
+          if (gs < 0) gs = 0;
+          const g2 = gs * gs;
+          const g4 = g2 * g2;
+          const g8 = g4 * g4;
+          const gspec = g8 * g8 * g8 * Math.max(0, 1 - gd / gleamR);
+
+          // environment: sky from above + fresnel at grazing edges
+          const sky = 0.3 + 0.42 * Math.max(0, -ny) + 0.07 * nx;
+          const fres = (1 - nz) * (1 - nz);
+          const base = 14 + sky * 132 + fres * 128;
+          const sp = spec * 225 + gspec * 255;
+
+          // cool mercury cast, faint ember pickup in the fresnel rim
+          let r = base * 0.94 + fres * 24 + sp;
+          let g = base * 0.97 + fres * 8 + sp;
+          let b = base * 1.06 + sp * 1.04;
+          if (r > 255) r = 255;
+          if (g > 255) g = 255;
+          if (b > 255) b = 255;
           data[idx] = r;
           data[idx + 1] = g;
           data[idx + 2] = b;
-          data[idx + 3] = a;
-          idx += 4;
+          data[idx + 3] = f < 1 ? ((f - 0.9) * 2550) | 0 : 255;
         }
       }
       offCtx.putImageData(buffer, 0, 0);
@@ -166,6 +217,7 @@ export default memo(function Ferrofluid() {
       off.width = bw;
       off.height = bh;
       buffer = offCtx.createImageData(bw, bh);
+      field = new Float32Array(bw * bh);
       seed();
       if (reduced) render();
     };
