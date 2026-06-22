@@ -1,442 +1,433 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Blob from "./Blob";
-import Marks from "./Marks";
-import Typewriter, { typo, type Op } from "./Typewriter";
-import { fallbackRepos, type Repo } from "./repos";
+import Typewriter, { type Op } from "./Typewriter";
 
-type NormalizedRepo = {
+/* ============================================================
+   frgmt.xyz — the site builds itself, on tape.
+   It opens blank. A cursor drags the blob in, types the wordmark,
+   drops in the one project worth showing (typer), wires the links,
+   and stops. SKIP cuts to the finished frame. One locked viewport,
+   no scroll.
+   ============================================================ */
+
+type Project = {
   name: string;
-  description: string;
+  desc: string;
   language: string;
   stars: number;
   url: string;
-  homepage: string;
-  updated_at: string;
+  updated: string;
 };
 
-type GitHubRepo = {
-  name: string;
-  description: string | null;
-  language: string | null;
-  stargazers_count: number;
-  html_url: string;
-  homepage: string | null;
-  updated_at: string;
+// real snapshot of github.com/frgmt0/typer — refreshed live on load
+const TYPER: Project = {
+  name: "typer",
+  desc: "Local, on-device autocomplete for macOS — inline AI completions via llama.cpp, no cloud.",
+  language: "Swift",
+  stars: 3,
+  url: "https://github.com/frgmt0/typer",
+  updated: "2026-06-21",
 };
 
-function normalizeRepo(repo: Repo | GitHubRepo): NormalizedRepo {
-  if ("html_url" in repo) {
-    return {
-      name: repo.name,
-      description: repo.description || "",
-      language: repo.language || "",
-      stars: repo.stargazers_count || 0,
-      url: repo.html_url,
-      homepage: repo.homepage || "",
-      updated_at: repo.updated_at || "",
-    };
-  }
-  return {
-    name: repo.name,
-    description: repo.description || "",
-    language: repo.language || "",
-    stars: repo.stars,
-    url: repo.url,
-    homepage: repo.homepage,
-    updated_at: repo.updated_at,
-  };
-}
+const wordScript: Op[] = [
+  { op: "type", text: "frg" },
+  { op: "type", text: "tm" }, // transposed
+  { op: "pause", ms: 380 },
+  { op: "selBack", n: 2 },
+  { op: "pause", ms: 130 },
+  { op: "type", text: "mt" }, // fixed -> frgmt
+];
 
-function formatDate(iso: string) {
-  if (!iso) return "—";
+const nameScript: Op[] = [{ op: "type", text: "typer", cps: 17 }];
+
+type Built = {
+  frame: boolean;
+  blob: boolean;
+  word: boolean;
+  typer: boolean;
+  links: boolean;
+};
+
+const ALL_BUILT: Built = { frame: true, blob: true, word: true, typer: true, links: true };
+const NONE_BUILT: Built = { frame: false, blob: false, word: false, typer: false, links: false };
+
+const fmtDate = (iso: string) => {
+  if (!iso) return "";
   const d = new Date(iso);
   return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(
     d.getDate()
   ).padStart(2, "0")}`;
-}
-
-function yearOf(iso: string) {
-  return iso ? new Date(iso).getFullYear() : 0;
-}
-
-const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+};
 
 export default function App() {
-  const [repos, setRepos] = useState<NormalizedRepo[]>(() => fallbackRepos.map(normalizeRepo));
-  const [source, setSource] = useState<"snapshot" | "live">("snapshot");
-  const [ready, setReady] = useState(false); // fetch settled (or timed out)
-  const [booted, setBooted] = useState(false); // boot assembly may begin
+  const [proj, setProj] = useState<Project>(TYPER);
+  const [built, setBuilt] = useState<Built>(NONE_BUILT);
+  const [done, setDone] = useState(false);
+  const [skipped, setSkipped] = useState(false);
+  const [log, setLog] = useState<string[]>([]);
 
-  const rowsRef = useRef(new Map<string, HTMLElement>());
-  const strataRef = useRef(new Map<number, HTMLElement>());
-  const railYearRef = useRef<HTMLSpanElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const cursorRef = useRef<SVGSVGElement | null>(null);
+  const blobBoxRef = useRef<HTMLDivElement | null>(null);
+  const wordRef = useRef<HTMLHeadingElement | null>(null);
+  const projRef = useRef<HTMLElement | null>(null);
+  const linksRef = useRef<HTMLElement | null>(null);
 
-  // ---- data ----
+  const wordDoneRef = useRef<(() => void) | null>(null);
+  const nameDoneRef = useRef<(() => void) | null>(null);
+  const directorRef = useRef<{ cancel: () => void } | null>(null);
+
+  // refresh typer from github (keeps stars/desc/date honest)
   useEffect(() => {
     let cancelled = false;
-    const settle = () => {
-      if (!cancelled) setReady(true);
-    };
-    const safety = setTimeout(settle, 1600); // never let typing wait forever
     (async () => {
       try {
-        const response = await fetch(
-          "https://api.github.com/users/frgmt0/repos?per_page=100&sort=updated",
-          { headers: { Accept: "application/vnd.github+json" } }
-        );
-        if (!response.ok) throw new Error("github did not answer");
-        const data = (await response.json()) as GitHubRepo[];
-        if (cancelled || !Array.isArray(data) || data.length === 0) return;
-        setRepos(data.map(normalizeRepo));
-        setSource("live");
+        const r = await fetch("https://api.github.com/repos/frgmt0/typer", {
+          headers: { Accept: "application/vnd.github+json" },
+        });
+        if (!r.ok) return;
+        const d = await r.json();
+        if (cancelled || !d?.name) return;
+        setProj({
+          name: d.name,
+          desc: d.description || TYPER.desc,
+          language: d.language || TYPER.language,
+          stars: d.stargazers_count ?? TYPER.stars,
+          url: d.html_url || TYPER.url,
+          updated: d.pushed_at || TYPER.updated,
+        });
       } catch {
-        if (!cancelled) setSource("snapshot");
-      } finally {
-        clearTimeout(safety);
-        settle();
+        /* keep the snapshot */
       }
     })();
     return () => {
       cancelled = true;
-      clearTimeout(safety);
     };
   }, []);
 
-  // ---- boot gate: hold the assembly until the display font is in ----
-  useEffect(() => {
-    let done = false;
-    const go = () => {
-      if (done) return;
-      done = true;
-      requestAnimationFrame(() => setBooted(true));
-    };
-    const fonts = (document as Document & { fonts?: FontFaceSet }).fonts;
-    if (fonts?.ready) fonts.ready.then(go).catch(go);
-    const t = setTimeout(go, 600); // fallback if fonts.ready never resolves
-    return () => clearTimeout(t);
-  }, []);
-
-  const sorted = useMemo(
-    () =>
-      [...repos].sort(
-        (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-      ),
-    [repos]
-  );
-
-  const indexOf = useMemo(() => {
-    const m = new Map<string, number>();
-    sorted.forEach((r, i) => m.set(r.name, i));
-    return m;
-  }, [sorted]);
-
-  const byYear = useMemo(() => {
-    const groups = new Map<number, NormalizedRepo[]>();
-    for (const r of sorted) {
-      const y = yearOf(r.updated_at);
-      if (!groups.has(y)) groups.set(y, []);
-      groups.get(y)!.push(r);
+  const finalize = () => {
+    setBuilt(ALL_BUILT);
+    setSkipped(true);
+    setDone(true);
+    setLog(["init", "frame", "blob", "frgmt", "typer", "ready"]);
+    const b = blobBoxRef.current;
+    if (b) {
+      b.style.transform = "";
+      b.style.opacity = "1";
     }
-    return [...groups.entries()].sort((a, b) => b[0] - a[0]);
-  }, [sorted]);
+    const c = cursorRef.current;
+    if (c) c.style.opacity = "0";
+  };
 
-  // marquee content from real data
-  const langs = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const r of sorted) if (r.language) counts.set(r.language, (counts.get(r.language) || 0) + 1);
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([l]) => l);
-  }, [sorted]);
-
-  const marquee = useMemo(() => {
-    const parts = [
-      "THE INDEX",
-      `${sorted.length} FRAGMENTS`,
-      "GITHUB.COM/FRGMT0",
-      ...langs.map((l) => l.toUpperCase()),
-      "34.0522°N 118.2437°W",
-    ];
-    return parts.join("  /  ");
-  }, [sorted.length, langs]);
-
-  // ---- typed scripts ----
-  // hero tagline: a person fiddling with copy — typo+fix, a pause, a cut.
-  const taglineScript = useMemo<Op[]>(
-    () => [
-      { op: "type", text: "we " },
-      ...typo("biuld", "build"),
-      { op: "type", text: " digital experiences" },
-      { op: "pause", ms: 760 },
-      { op: "selBack", n: "experiences".length },
-      { op: "cut" },
-      { op: "pause", ms: 360 },
-      { op: "type", text: "fragments." },
-    ],
-    []
-  );
-
-  // topline status: a terminal edit that cuts a path, swaps the command,
-  // pastes the path back — then appends the *real* fetch result.
-  const statusScript = useMemo<Op[]>(() => {
-    const tail =
-      source === "live"
-        ? `  ·  ${sorted.length} live`
-        : `  ·  snapshot · ${sorted.length}`;
-    return [
-      { op: "type", text: "curl github.com/frgmt0", cps: 24 },
-      { op: "pause", ms: 520 },
-      { op: "selBack", n: "github.com/frgmt0".length },
-      { op: "cut" },
-      { op: "pause", ms: 220 },
-      { op: "back", n: "curl ".length },
-      { op: "pause", ms: 180 },
-      { op: "type", text: "open ", cps: 22 },
-      { op: "paste" },
-      { op: "pause", ms: 420 },
-      { op: "type", text: tail, cps: 26 },
-    ];
-  }, [source, sorted.length]);
-
-  // Scene engine: one rAF loop drives pointer parallax (--px/--py on :root),
-  // per-row focal depth (--f), the depth gauge (--depth), and the rail's
-  // current-stratum label. Direct DOM writes — no React state per frame.
+  // the director
   useEffect(() => {
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const root = document.documentElement;
+    const coarse = window.matchMedia("(pointer: coarse)").matches;
+
+    if (reduced || coarse) {
+      // no performance for touch / reduced-motion: show the finished frame
+      finalize();
+      return;
+    }
+
+    let alive = true;
     let raf = 0;
-    let px = 0;
-    let py = 0;
-    let tx = 0;
-    let ty = 0;
-    let lastYear = "";
-    let rows: { el: HTMLElement; top: number; f: number }[] = [];
-    let strata: { year: number; top: number }[] = [];
-    let docH = 1;
+    const timers: ReturnType<typeof setTimeout>[] = [];
 
-    const measure = () => {
-      const sy = window.scrollY;
-      rows = [...rowsRef.current.values()].map((el) => ({
-        el,
-        top: el.getBoundingClientRect().top + sy,
-        f: -1,
-      }));
-      strata = [...strataRef.current.entries()]
-        .map(([year, el]) => ({ year, top: el.getBoundingClientRect().top + sy }))
-        .sort((a, b) => a.top - b.top);
-      docH = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+    const cur = cursorRef.current!;
+    const blobBox = blobBoxRef.current!;
+    let cx = -60;
+    let cy = -60;
+
+    const place = (x: number, y: number, press = false) => {
+      cx = x;
+      cy = y;
+      cur.style.transform = `translate(${x - 2}px, ${y - 1}px)`;
+      cur.dataset.press = press ? "1" : "";
+    };
+    place(cx, cy);
+
+    const sleep = (ms: number) =>
+      new Promise<void>((res) => {
+        timers.push(setTimeout(res, ms));
+      });
+
+    const easeInOut = (p: number) =>
+      p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+
+    // Progression is timer-driven so the sequence completes even if the
+    // tab is backgrounded (rAF pauses there). rAF only paints between ticks.
+    const moveTo = (
+      tx: number,
+      ty: number,
+      ms: number,
+      onProgress?: (e: number, x: number, y: number) => void,
+      press = false
+    ) =>
+      new Promise<void>((res) => {
+        const sx = cx;
+        const sy = cy;
+        const t0 = performance.now();
+        const paint = (now: number) => {
+          if (!alive) return;
+          const p = Math.min(1, (now - t0) / ms);
+          const e = easeInOut(p);
+          place(sx + (tx - sx) * e, sy + (ty - sy) * e, press);
+          onProgress?.(e, cx, cy);
+          if (p < 1) raf = requestAnimationFrame(paint);
+        };
+        raf = requestAnimationFrame(paint);
+        timers.push(
+          setTimeout(() => {
+            cancelAnimationFrame(raf);
+            place(tx, ty, press);
+            onProgress?.(1, tx, ty);
+            res();
+          }, ms)
+        );
+      });
+
+    const center = (el: Element | null) => {
+      const r = el?.getBoundingClientRect();
+      return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: 0, y: 0 };
     };
 
-    const onPointer = (e: PointerEvent) => {
-      tx = (e.clientX / window.innerWidth) * 2 - 1;
-      ty = (e.clientY / window.innerHeight) * 2 - 1;
+    const gate = (ref: React.MutableRefObject<(() => void) | null>, maxMs: number) =>
+      Promise.race([
+        new Promise<void>((res) => {
+          ref.current = res;
+        }),
+        sleep(maxMs),
+      ]);
+
+    const addLog = (line: string) => setLog((l) => [...l, line]);
+
+    directorRef.current = {
+      cancel: () => {
+        alive = false;
+        cancelAnimationFrame(raf);
+        for (const t of timers) clearTimeout(t);
+      },
     };
 
-    const frame = () => {
-      if (!reduced) {
-        px += (tx - px) * 0.06;
-        py += (ty - py) * 0.06;
-        root.style.setProperty("--px", px.toFixed(4));
-        root.style.setProperty("--py", py.toFixed(4));
+    (async () => {
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+
+      await sleep(450);
+      if (!alive) return;
+
+      // 1 — frame
+      addLog("init");
+      setBuilt((b) => ({ ...b, frame: true }));
+      await sleep(650);
+      addLog("frame");
+
+      // 2 — drag the blob in from the left
+      const origin = { x: W * 0.14, y: H * 0.46 };
+      const home = center(blobBox);
+      await moveTo(origin.x, origin.y, 750);
+      if (!alive) return;
+      place(cx, cy, true); // grab
+      blobBox.style.opacity = "1";
+      await sleep(200);
+      await moveTo(
+        home.x,
+        home.y,
+        1500,
+        (e, x, y) => {
+          const tx = x - home.x;
+          const ty = y - home.y;
+          const s = 0.14 + 0.86 * e;
+          blobBox.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
+        },
+        true
+      );
+      if (!alive) return;
+      place(cx, cy, false); // release
+      blobBox.style.transform = "";
+      setBuilt((b) => ({ ...b, blob: true }));
+      addLog("blob");
+      await sleep(420);
+
+      // 3 — type the wordmark
+      const w = wordRef.current?.getBoundingClientRect();
+      if (w) await moveTo(w.left + 36, w.top + w.height * 0.62, 720);
+      if (!alive) return;
+      place(cx, cy, true);
+      await sleep(150);
+      place(cx, cy, false);
+      setBuilt((b) => ({ ...b, word: true }));
+      await gate(wordDoneRef, 6000);
+      if (!alive) return;
+      addLog("frgmt");
+      await sleep(320);
+
+      // 4 — drop the project block in
+      const p = projRef.current?.getBoundingClientRect();
+      if (p) {
+        await moveTo(p.left + 40, p.top + 26, 720);
+        if (!alive) return;
+        place(cx, cy, true);
+        await sleep(160);
+        place(cx, cy, false);
       }
+      setBuilt((b) => ({ ...b, typer: true }));
+      await gate(nameDoneRef, 5000);
+      if (!alive) return;
+      addLog("typer");
+      await sleep(360);
 
-      const sy = window.scrollY;
-      const vh = window.innerHeight;
-      const focal = sy + vh * 0.88;
-      const falloff = vh * 0.34;
+      // 5 — wire the links, park
+      const l = center(linksRef.current);
+      await moveTo(l.x, l.y, 620);
+      if (!alive) return;
+      setBuilt((b) => ({ ...b, links: true }));
+      await sleep(420);
+      addLog("ready");
+      // glide the cursor off and fade it
+      await moveTo(window.innerWidth + 60, window.innerHeight * 0.9, 900);
+      if (!alive) return;
+      cur.style.opacity = "0";
+      setDone(true);
+    })();
 
-      for (const r of rows) {
-        const f = reduced ? 1 : clamp01(1 - (r.top - focal) / falloff);
-        if (Math.abs(f - r.f) > 0.004) {
-          r.el.style.setProperty("--f", f.toFixed(3));
-          r.f = f;
-        }
-      }
-
-      root.style.setProperty("--depth", (sy / docH).toFixed(4));
-
-      let current = strata[0]?.year;
-      for (const s of strata) if (s.top <= sy + vh * 0.5) current = s.year;
-      const label = current ? String(current) : "";
-      if (label !== lastYear && railYearRef.current) {
-        railYearRef.current.textContent = label;
-        lastYear = label;
-      }
-
-      raf = requestAnimationFrame(frame);
-    };
-
-    measure();
-    document.fonts?.ready.then(measure).catch(() => {});
-    window.addEventListener("resize", measure);
-    window.addEventListener("pointermove", onPointer, { passive: true });
-    raf = requestAnimationFrame(frame);
     return () => {
+      alive = false;
       cancelAnimationFrame(raf);
-      window.removeEventListener("resize", measure);
-      window.removeEventListener("pointermove", onPointer);
+      for (const t of timers) clearTimeout(t);
     };
-  }, [sorted]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const skip = () => {
+    directorRef.current?.cancel();
+    finalize();
+  };
+
+  const showWord = built.word;
+  const showName = built.typer;
 
   return (
-    <>
-      <Marks />
-      <div className={`site${booted ? " is-booted" : ""}`}>
-        <header className="topline">
-          <span className="topline-brand boot boot-1">frgmt.xyz</span>
-          <span className="topline-status boot boot-1">
-            <span className="prompt" aria-hidden="true">
-              →
-            </span>
-            <Typewriter
-              script={statusScript}
-              start={booted && ready}
-              caretAtRest={false}
-              className="tw tw-mono"
-              ariaLabel={
-                source === "live"
-                  ? `${sorted.length} repositories, live from github`
-                  : `${sorted.length} repositories, bundled snapshot`
-              }
-            />
-          </span>
-        </header>
-
-        <section className="hero" aria-label="Introduction">
-          <Blob />
-
-          <div className="hero-inner">
-            <h1 className="word boot" aria-label="frgmt">
-              <span className="word-size" aria-hidden="true">
-                frgmt
-              </span>
-              <span className="word-shard ws-ghost" aria-hidden="true">
-                <span className="word-piece" style={{ animationDelay: "40ms" }}>
-                  frgmt
-                </span>
-              </span>
-              <span className="word-shard ws-a" aria-hidden="true">
-                <span className="word-piece" style={{ animationDelay: "120ms" }}>
-                  frgmt
-                </span>
-              </span>
-              <span className="word-shard ws-b" aria-hidden="true">
-                <span className="word-piece" style={{ animationDelay: "210ms" }}>
-                  frgmt
-                </span>
-              </span>
-              <span className="word-shard ws-c" aria-hidden="true">
-                <span className="word-piece" style={{ animationDelay: "300ms" }}>
-                  frgmt
-                </span>
-              </span>
-            </h1>
-
-            <p className="tagline boot boot-3">
-              <Typewriter
-                script={taglineScript}
-                start={booted}
-                className="tw tw-tag"
-              />
-            </p>
-          </div>
-
-          <span className="hero-edge boot boot-2" aria-hidden="true">
-            34.0522°N · 118.2437°W
-          </span>
-
-          <div className="descend boot boot-3" aria-hidden="true">
-            <span className="descend-label">scroll</span>
-            <span className="descend-line" />
-          </div>
-        </section>
-
-        <div className="marquee boot boot-2" aria-hidden="true">
-          <div className="marquee-track">
-            <span>{marquee}</span>
-            <span>{marquee}</span>
-            <span>{marquee}</span>
-          </div>
-        </div>
-
-        <section className="dig" aria-label="Repository index">
-          <aside className="rail" aria-hidden="true">
-            <span className="rail-cap">now</span>
-            <span className="rail-line">
-              <span className="rail-fill" />
-              <span className="rail-dot" />
-            </span>
-            <span className="rail-year" ref={railYearRef} />
-          </aside>
-
-          <div className="strata">
-            {byYear.map(([year, list], gi) => (
-              <section
-                key={year}
-                className="stratum"
-                ref={(el) => {
-                  if (el) strataRef.current.set(year, el);
-                  else strataRef.current.delete(year);
-                }}
-              >
-                <span className="stratum-ghost" aria-hidden="true">
-                  {year}
-                </span>
-                <header className="stratum-head">
-                  <span className="stratum-year">{year}</span>
-                  <span className="stratum-rule" aria-hidden="true" />
-                  <span className="stratum-count">
-                    [{String(list.length).padStart(2, "0")}]
-                  </span>
-                </header>
-
-                {list.map((r, ri) => {
-                  const n = indexOf.get(r.name) ?? gi * 100 + ri;
-                  return (
-                    <article
-                      key={r.name}
-                      className="row"
-                      ref={(el) => {
-                        if (el) rowsRef.current.set(r.name, el);
-                        else rowsRef.current.delete(r.name);
-                      }}
-                    >
-                      <span className="row-no" aria-hidden="true">
-                        {String(n + 1).padStart(2, "0")}
-                      </span>
-                      <span className="row-date">{formatDate(r.updated_at)}</span>
-                      <div className="row-main">
-                        <h3 className="row-name">
-                          <a href={r.url}>{r.name}</a>
-                        </h3>
-                        {r.description && <p className="row-desc">{r.description}</p>}
-                      </div>
-                      <div className="row-meta">
-                        {r.language && <span className="row-lang">{r.language}</span>}
-                        {r.stars > 0 && <span className="row-stars">★ {r.stars}</span>}
-                        {r.homepage && (
-                          <a className="row-site" href={r.homepage} aria-label="visit site">
-                            ↗
-                          </a>
-                        )}
-                      </div>
-                    </article>
-                  );
-                })}
-              </section>
-            ))}
-          </div>
-        </section>
-
-        <footer className="end">
-          <p>
-            Pulled live from <a href="https://github.com/frgmt0">github.com/frgmt0</a> on
-            load; falls back to a bundled snapshot when github won't answer.
-          </p>
-          <p className="end-links">
-            <a href="https://github.com/frgmt0">github</a>
-            <a href="https://kcodes.me">kcodes.me</a>
-          </p>
-        </footer>
+    <div
+      className="stage"
+      ref={stageRef}
+      data-done={done ? "1" : undefined}
+      data-skipped={skipped ? "1" : undefined}
+    >
+      {/* layout guides + registration marks */}
+      <div className={`guides${built.frame ? " in" : ""}`} aria-hidden="true">
+        <span className="reg reg-tl" />
+        <span className="reg reg-tr" />
+        <span className="reg reg-bl" />
+        <span className="reg reg-br" />
+        <span className="guide guide-h" />
+        <span className="guide guide-v" />
       </div>
-    </>
+
+      {/* the blob */}
+      <div className={`blob-box${built.blob ? " in" : ""}`} ref={blobBoxRef} aria-hidden="true">
+        <Blob />
+      </div>
+
+      {/* synthetic cursor */}
+      <svg
+        className="cursor"
+        ref={cursorRef}
+        viewBox="0 0 24 24"
+        width="23"
+        height="23"
+        aria-hidden="true"
+      >
+        <path
+          d="M3 1.5 L3 20.5 L8.2 15.3 L11.4 21.6 L14.3 20.1 L11.1 13.9 L18.5 13.9 Z"
+          fill="var(--paper)"
+          stroke="var(--ink)"
+          strokeWidth="1.2"
+          strokeLinejoin="round"
+        />
+      </svg>
+
+      {/* top bar */}
+      <header className="bar">
+        <span className="bar-brand">frgmt.xyz</span>
+        {!done && (
+          <button className="skip" onClick={skip} type="button">
+            skip <span aria-hidden="true">→</span>
+          </button>
+        )}
+      </header>
+
+      {/* the work */}
+      <main className="work">
+        <h1 className="word" ref={wordRef} aria-label="frgmt">
+          {skipped ? (
+            <span className="word-static">frgmt</span>
+          ) : showWord ? (
+            <Typewriter
+              script={wordScript}
+              start
+              caretAtRest={false}
+              className="word-tw"
+              ariaLabel="frgmt"
+              onDone={() => wordDoneRef.current?.()}
+            />
+          ) : (
+            <span className="word-static" style={{ visibility: "hidden" }}>
+              frgmt
+            </span>
+          )}
+        </h1>
+
+        <p className={`word-sub${built.typer ? " in" : ""}`}>small, finishable software</p>
+
+        <section className={`proj${built.typer ? " in" : ""}`} ref={projRef} aria-label={proj.name}>
+          <div className="proj-head">
+            <span className="proj-tag">now</span>
+            <h2 className="proj-name">
+              {skipped ? (
+                <span>{proj.name}</span>
+              ) : showName ? (
+                <Typewriter
+                  script={nameScript}
+                  start
+                  caretAtRest={false}
+                  className="name-tw"
+                  ariaLabel={proj.name}
+                  onDone={() => nameDoneRef.current?.()}
+                />
+              ) : (
+                <span style={{ visibility: "hidden" }}>{proj.name}</span>
+              )}
+            </h2>
+            <span className="proj-meta">
+              {proj.language} · ★{proj.stars} · {fmtDate(proj.updated)}
+            </span>
+          </div>
+          <div className="proj-body">
+            <p className="proj-desc">{proj.desc}</p>
+            <a className="proj-link" href={proj.url}>
+              → github.com/frgmt0/typer
+            </a>
+          </div>
+        </section>
+      </main>
+
+      {/* footer */}
+      <footer className="foot">
+        <div className="log" aria-hidden="true">
+          {log.slice(-5).map((line, i, arr) => (
+            <span key={`${line}-${i}`} data-last={i === arr.length - 1 ? "1" : undefined}>
+              {line}
+            </span>
+          ))}
+        </div>
+        <nav className={`foot-links${built.links ? " in" : ""}`} ref={linksRef} aria-label="elsewhere">
+          <a href="https://github.com/frgmt0">github</a>
+          <a href="https://kcodes.me">kcodes.me</a>
+          <span className="foot-coord">34.05°N 118.24°W</span>
+        </nav>
+      </footer>
+    </div>
   );
 }
