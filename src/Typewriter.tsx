@@ -47,7 +47,7 @@ type Props = {
 
 // resolve the final committed text by replaying the ops with no timing —
 // used for prefers-reduced-motion and for the aria-label.
-function resolve(script: Op[]): string {
+export function resolve(script: Op[]): string {
   let text = "";
   let sel: number | null = null;
   let clip = "";
@@ -170,7 +170,7 @@ export default function Typewriter({
               flush();
               await wait(90);
             }
-            const cps = o.cps ?? 21;
+            const cps = o.cps ?? 11; // ~110 wpm, human pace
             for (const ch of o.text) {
               if (!alive) return;
               t += ch;

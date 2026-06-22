@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import Blob from "./Blob";
-import Typewriter, { type Op } from "./Typewriter";
+import Ascii from "./Ascii";
+import Jw from "./Jw";
+import Typewriter, { resolve, typo, type Op } from "./Typewriter";
 
 /* ============================================================
-   frgmt.xyz — the site builds itself, on tape.
-   It opens blank. A cursor drags the blob in, types the wordmark,
-   drops in the one project worth showing (typer), wires the links,
-   and stops. SKIP cuts to the finished frame. One locked viewport,
-   no scroll.
+   frgmt.xyz — a page that types itself out.
+   The jw mark auditions typefaces, then the copy is typed one line
+   at a time at a human pace — pauses, typos, corrections. A cursor
+   drags a (real, random) pug in for no reason. SKIP cuts to the end.
    ============================================================ */
 
 type Project = {
@@ -19,7 +19,6 @@ type Project = {
   updated: string;
 };
 
-// real snapshot of github.com/frgmt0/typer — refreshed live on load
 const TYPER: Project = {
   name: "typer",
   desc: "Local, on-device autocomplete for macOS — inline AI completions via llama.cpp, no cloud.",
@@ -29,55 +28,47 @@ const TYPER: Project = {
   updated: "2026-06-21",
 };
 
-const wordScript: Op[] = [
-  { op: "type", text: "frg" },
-  { op: "type", text: "tm" }, // transposed
-  { op: "pause", ms: 380 },
-  { op: "selBack", n: 2 },
-  { op: "pause", ms: 130 },
-  { op: "type", text: "mt" }, // fixed -> frgmt
-];
-
-const nameScript: Op[] = [{ op: "type", text: "typer", cps: 17 }];
-
-type Built = {
-  frame: boolean;
-  blob: boolean;
-  word: boolean;
-  typer: boolean;
-  links: boolean;
+// typed lines — one at a time, with a typo the typist goes back and fixes
+const SC: Record<string, Op[]> = {
+  lead: [
+    { op: "type", text: "jason w · " },
+    ...typo("enginer", "engineer"),
+    { op: "type", text: " · los angeles" },
+  ],
+  bio: [
+    { op: "type", text: "i ship small, " },
+    ...typo("finishble", "finishable"),
+    { op: "type", text: " tools." },
+  ],
+  stack: [{ op: "type", text: "rust · swift · typescript · python" }],
 };
-
-const ALL_BUILT: Built = { frame: true, blob: true, word: true, typer: true, links: true };
-const NONE_BUILT: Built = { frame: false, blob: false, word: false, typer: false, links: false };
 
 const fmtDate = (iso: string) => {
   if (!iso) return "";
   const d = new Date(iso);
-  return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(
-    d.getDate()
+  return `${d.getUTCFullYear()}.${String(d.getUTCMonth() + 1).padStart(2, "0")}.${String(
+    d.getUTCDate()
   ).padStart(2, "0")}`;
 };
 
 export default function App() {
   const [proj, setProj] = useState<Project>(TYPER);
-  const [built, setBuilt] = useState<Built>(NONE_BUILT);
-  const [done, setDone] = useState(false);
+  const [dogUrl, setDogUrl] = useState<string | null>(null);
+  const [dogIn, setDogIn] = useState(false);
+  const [phase, setPhase] = useState(0);
   const [skipped, setSkipped] = useState(false);
-  const [log, setLog] = useState<string[]>([]);
+  const [done, setDone] = useState(false);
+  const [fontCaption, setFontCaption] = useState("");
 
-  const stageRef = useRef<HTMLDivElement | null>(null);
-  const cursorRef = useRef<SVGSVGElement | null>(null);
-  const blobBoxRef = useRef<HTMLDivElement | null>(null);
-  const wordRef = useRef<HTMLHeadingElement | null>(null);
-  const projRef = useRef<HTMLElement | null>(null);
-  const linksRef = useRef<HTMLElement | null>(null);
-
-  const wordDoneRef = useRef<(() => void) | null>(null);
-  const nameDoneRef = useRef<(() => void) | null>(null);
+  const gateRef = useRef<(() => void) | null>(null);
+  const auditionRef = useRef<(() => void) | null>(null);
   const directorRef = useRef<{ cancel: () => void } | null>(null);
+  const cursorRef = useRef<SVGSVGElement | null>(null);
+  const dogRef = useRef<HTMLDivElement | null>(null);
+  const dogUrlRef = useRef<string | null>(null);
+  dogUrlRef.current = dogUrl;
 
-  // refresh typer from github (keeps stars/desc/date honest)
+  // typer, live
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -97,7 +88,24 @@ export default function App() {
           updated: d.pushed_at || TYPER.updated,
         });
       } catch {
-        /* keep the snapshot */
+        /* keep snapshot */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // a real, random pug from the interwebs, to drag in later
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("https://dog.ceo/api/breed/pug/images/random");
+        const d = await r.json();
+        if (!cancelled && d?.status === "success" && d.message) setDogUrl(d.message);
+      } catch {
+        /* no dog, no drag — the build just skips it */
       }
     })();
     return () => {
@@ -106,26 +114,21 @@ export default function App() {
   }, []);
 
   const finalize = () => {
-    setBuilt(ALL_BUILT);
     setSkipped(true);
+    setPhase(99);
     setDone(true);
-    setLog(["init", "frame", "blob", "frgmt", "typer", "ready"]);
-    const b = blobBoxRef.current;
-    if (b) {
-      b.style.transform = "";
-      b.style.opacity = "1";
-    }
+    setDogIn(true);
+    setFontCaption("font: archivo ✓");
     const c = cursorRef.current;
     if (c) c.style.opacity = "0";
+    const dog = dogRef.current;
+    if (dog) dog.style.transform = "";
   };
 
-  // the director
+  // director
   useEffect(() => {
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const coarse = window.matchMedia("(pointer: coarse)").matches;
-
-    if (reduced || coarse) {
-      // no performance for touch / reduced-motion: show the finished frame
+    if (reduced) {
       finalize();
       return;
     }
@@ -133,35 +136,36 @@ export default function App() {
     let alive = true;
     let raf = 0;
     const timers: ReturnType<typeof setTimeout>[] = [];
-
-    const cur = cursorRef.current!;
-    const blobBox = blobBoxRef.current!;
-    let cx = -60;
-    let cy = -60;
-
-    const place = (x: number, y: number, press = false) => {
-      cx = x;
-      cy = y;
-      cur.style.transform = `translate(${x - 2}px, ${y - 1}px)`;
-      cur.dataset.press = press ? "1" : "";
-    };
-    place(cx, cy);
-
     const sleep = (ms: number) =>
       new Promise<void>((res) => {
         timers.push(setTimeout(res, ms));
       });
+    const gate = (ref: { current: (() => void) | null }, maxMs: number) =>
+      Promise.race([
+        new Promise<void>((res) => {
+          ref.current = res;
+        }),
+        sleep(maxMs),
+      ]);
 
-    const easeInOut = (p: number) =>
-      p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
-
-    // Progression is timer-driven so the sequence completes even if the
-    // tab is backgrounded (rAF pauses there). rAF only paints between ticks.
+    // synthetic cursor (only used for the dog drag)
+    const cur = cursorRef.current;
+    let cx = -80;
+    let cy = -80;
+    const place = (x: number, y: number, press = false) => {
+      cx = x;
+      cy = y;
+      if (cur) {
+        cur.style.transform = `translate(${x - 2}px, ${y - 1}px)`;
+        cur.dataset.press = press ? "1" : "";
+      }
+    };
+    const easeInOut = (p: number) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
     const moveTo = (
       tx: number,
       ty: number,
       ms: number,
-      onProgress?: (e: number, x: number, y: number) => void,
+      onP?: (e: number, x: number, y: number) => void,
       press = false
     ) =>
       new Promise<void>((res) => {
@@ -173,7 +177,7 @@ export default function App() {
           const p = Math.min(1, (now - t0) / ms);
           const e = easeInOut(p);
           place(sx + (tx - sx) * e, sy + (ty - sy) * e, press);
-          onProgress?.(e, cx, cy);
+          onP?.(e, cx, cy);
           if (p < 1) raf = requestAnimationFrame(paint);
         };
         raf = requestAnimationFrame(paint);
@@ -181,26 +185,44 @@ export default function App() {
           setTimeout(() => {
             cancelAnimationFrame(raf);
             place(tx, ty, press);
-            onProgress?.(1, tx, ty);
+            onP?.(1, tx, ty);
             res();
           }, ms)
         );
       });
 
-    const center = (el: Element | null) => {
-      const r = el?.getBoundingClientRect();
-      return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: 0, y: 0 };
+    const dragDog = async () => {
+      const dog = dogRef.current;
+      if (!dogUrlRef.current || !dog || !cur) return;
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      const r = dog.getBoundingClientRect();
+      const home = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      cur.style.opacity = "1";
+      place(W * 0.08, H * 1.05);
+      await moveTo(W * 0.08, H * 0.86, 700);
+      if (!alive) return;
+      place(cx, cy, true); // grab
+      dog.style.opacity = "1";
+      await sleep(160);
+      await moveTo(
+        home.x,
+        home.y,
+        1250,
+        (e, x, y) => {
+          const s = 0.18 + 0.82 * e;
+          dog.style.transform = `translate(${x - home.x}px, ${y - home.y}px) scale(${s}) rotate(${(1 - e) * 14 - 4}deg)`;
+        },
+        true
+      );
+      if (!alive) return;
+      place(cx, cy, false); // drop
+      dog.style.transform = ""; // settle to css rest (a slight tilt)
+      setDogIn(true);
+      await sleep(260);
+      await moveTo(W + 80, H * 0.8, 800);
+      if (cur) cur.style.opacity = "0";
     };
-
-    const gate = (ref: React.MutableRefObject<(() => void) | null>, maxMs: number) =>
-      Promise.race([
-        new Promise<void>((res) => {
-          ref.current = res;
-        }),
-        sleep(maxMs),
-      ]);
-
-    const addLog = (line: string) => setLog((l) => [...l, line]);
 
     directorRef.current = {
       cancel: () => {
@@ -211,84 +233,46 @@ export default function App() {
     };
 
     (async () => {
-      const W = window.innerWidth;
-      const H = window.innerHeight;
-
-      await sleep(450);
-      if (!alive) return;
-
-      // 1 — frame
-      addLog("init");
-      setBuilt((b) => ({ ...b, frame: true }));
-      await sleep(650);
-      addLog("frame");
-
-      // 2 — drag the blob in from the left
-      const origin = { x: W * 0.14, y: H * 0.46 };
-      const home = center(blobBox);
-      await moveTo(origin.x, origin.y, 750);
-      if (!alive) return;
-      place(cx, cy, true); // grab
-      blobBox.style.opacity = "1";
-      await sleep(200);
-      await moveTo(
-        home.x,
-        home.y,
-        1500,
-        (e, x, y) => {
-          const tx = x - home.x;
-          const ty = y - home.y;
-          const s = 0.14 + 0.86 * e;
-          blobBox.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
-        },
-        true
-      );
-      if (!alive) return;
-      place(cx, cy, false); // release
-      blobBox.style.transform = "";
-      setBuilt((b) => ({ ...b, blob: true }));
-      addLog("blob");
       await sleep(420);
-
-      // 3 — type the wordmark
-      const w = wordRef.current?.getBoundingClientRect();
-      if (w) await moveTo(w.left + 36, w.top + w.height * 0.62, 720);
       if (!alive) return;
-      place(cx, cy, true);
+
+      setPhase(2); // jw + audition
+      await gate(auditionRef, 4000);
+      if (!alive) return;
       await sleep(150);
-      place(cx, cy, false);
-      setBuilt((b) => ({ ...b, word: true }));
-      await gate(wordDoneRef, 6000);
-      if (!alive) return;
-      addLog("frgmt");
-      await sleep(320);
 
-      // 4 — drop the project block in
-      const p = projRef.current?.getBoundingClientRect();
-      if (p) {
-        await moveTo(p.left + 40, p.top + 26, 720);
-        if (!alive) return;
-        place(cx, cy, true);
-        await sleep(160);
-        place(cx, cy, false);
-      }
-      setBuilt((b) => ({ ...b, typer: true }));
-      await gate(nameDoneRef, 5000);
+      setPhase(3); // lead
+      await gate(gateRef, 45000);
       if (!alive) return;
-      addLog("typer");
-      await sleep(360);
+      await sleep(60);
 
-      // 5 — wire the links, park
-      const l = center(linksRef.current);
-      await moveTo(l.x, l.y, 620);
+      setPhase(4); // bio
+      await gate(gateRef, 45000);
       if (!alive) return;
-      setBuilt((b) => ({ ...b, links: true }));
+      await sleep(60);
+
+      setPhase(5); // stack
+      await gate(gateRef, 45000);
+      if (!alive) return;
+      await sleep(140);
+
+      setPhase(6); // now divider
+      await sleep(200);
+
+      setPhase(7); // typer name
+      await gate(gateRef, 20000);
+      if (!alive) return;
+      setPhase(8); // project body
       await sleep(420);
-      addLog("ready");
-      // glide the cursor off and fade it
-      await moveTo(window.innerWidth + 60, window.innerHeight * 0.9, 900);
+
+      setPhase(9); // ascii
+      await sleep(620);
+
+      await dragDog(); // the gag
       if (!alive) return;
-      cur.style.opacity = "0";
+
+      setPhase(11); // links
+      await sleep(200);
       setDone(true);
     })();
 
@@ -305,40 +289,117 @@ export default function App() {
     finalize();
   };
 
-  const showWord = built.word;
-  const showName = built.typer;
+  // typed line that resolves to static text once skipped
+  const tline = (script: Op[], n: number, cls = "") => {
+    if (skipped) return <span className={cls}>{resolve(script)}</span>;
+    if (phase < n)
+      return (
+        <span className={cls} style={{ visibility: "hidden" }}>
+          {resolve(script)}
+        </span>
+      );
+    return (
+      <Typewriter
+        key={n}
+        script={script}
+        start
+        caretAtRest={false}
+        className={cls}
+        ariaLabel={resolve(script)}
+        onDone={() => gateRef.current?.()}
+      />
+    );
+  };
+
+  const vis = (n: number) => skipped || phase >= n;
 
   return (
-    <div
-      className="stage"
-      ref={stageRef}
-      data-done={done ? "1" : undefined}
-      data-skipped={skipped ? "1" : undefined}
-    >
-      {/* layout guides + registration marks */}
-      <div className={`guides${built.frame ? " in" : ""}`} aria-hidden="true">
-        <span className="reg reg-tl" />
-        <span className="reg reg-tr" />
-        <span className="reg reg-bl" />
-        <span className="reg reg-br" />
-        <span className="guide guide-h" />
-        <span className="guide guide-v" />
+    <div className="term" data-done={done ? "1" : undefined}>
+      <div className="scan" aria-hidden="true" />
+
+      {!done && (
+        <button className="skip-float" type="button" onClick={skip}>
+          skip <span aria-hidden="true">→</span>
+        </button>
+      )}
+
+      <main className="term-grid">
+        <section className="term-main">
+          <h1 className={`jw${vis(2) ? " in" : ""}`} aria-label="jw — jason w">
+            <Jw
+              start={phase >= 2}
+              skip={skipped}
+              onLocked={() => auditionRef.current?.()}
+              onCaption={setFontCaption}
+            />
+            <span className="jw-cap" aria-hidden="true">
+              {fontCaption}
+            </span>
+          </h1>
+
+          <p className="lead">{tline(SC.lead, 3, "lead-line")}</p>
+
+          <div className="bio">
+            <p>{tline(SC.bio, 4, "bio-line")}</p>
+            <p>{tline(SC.stack, 5, "bio-stack")}</p>
+          </div>
+
+          <div className={`now${vis(6) ? " in" : ""}`} aria-hidden={!vis(6)}>
+            <span className="now-tag">now</span>
+            <span className="now-rule" />
+          </div>
+
+          <section className="proj" aria-label={proj.name}>
+            <div className="proj-head">
+              <h2 className="proj-name">
+                {skipped ? (
+                  <span>{proj.name}</span>
+                ) : phase >= 7 ? (
+                  <Typewriter
+                    key="pn"
+                    script={[{ op: "type", text: proj.name }]}
+                    start
+                    caretAtRest={false}
+                    ariaLabel={proj.name}
+                    onDone={() => gateRef.current?.()}
+                  />
+                ) : (
+                  <span style={{ visibility: "hidden" }}>{proj.name}</span>
+                )}
+              </h2>
+              <span className={`proj-meta${vis(8) ? " in" : ""}`}>
+                {proj.language.toLowerCase()} · ★{proj.stars} · {fmtDate(proj.updated)}
+              </span>
+            </div>
+            <div className={`proj-body${vis(8) ? " in" : ""}`}>
+              <p className="proj-desc">{proj.desc}</p>
+              <a className="proj-link" href={proj.url}>
+                → github.com/frgmt0/typer
+              </a>
+            </div>
+          </section>
+
+          <nav className={`links${vis(11) ? " in" : ""}`} aria-label="links">
+            <a href="https://github.com/frgmt0">github</a>
+            <span aria-hidden="true">·</span>
+            <a href="https://kcodes.me">kcodes.me</a>
+          </nav>
+        </section>
+
+        <aside className={`term-side${vis(9) ? " in" : ""}`} aria-hidden="true">
+          <Ascii run={vis(9)} />
+          <span className="side-cap">ascii · torus</span>
+        </aside>
+      </main>
+
+      {/* the gag: a real random pug, dragged in */}
+      <div className={`dog${dogIn ? " in" : ""}`} ref={dogRef} aria-hidden="true">
+        {dogUrl && <img src={dogUrl} alt="" draggable={false} />}
+        <span className="dog-cap">dog.jpg</span>
       </div>
 
-      {/* the blob */}
-      <div className={`blob-box${built.blob ? " in" : ""}`} ref={blobBoxRef} aria-hidden="true">
-        <Blob />
-      </div>
-
-      {/* synthetic cursor */}
-      <svg
-        className="cursor"
-        ref={cursorRef}
-        viewBox="0 0 24 24"
-        width="23"
-        height="23"
-        aria-hidden="true"
-      >
+      {/* synthetic cursor (dog drag only) */}
+      <svg className="cursor" ref={cursorRef} viewBox="0 0 24 24" width="23" height="23" aria-hidden="true">
         <path
           d="M3 1.5 L3 20.5 L8.2 15.3 L11.4 21.6 L14.3 20.1 L11.1 13.9 L18.5 13.9 Z"
           fill="var(--paper)"
@@ -347,87 +408,6 @@ export default function App() {
           strokeLinejoin="round"
         />
       </svg>
-
-      {/* top bar */}
-      <header className="bar">
-        <span className="bar-brand">frgmt.xyz</span>
-        {!done && (
-          <button className="skip" onClick={skip} type="button">
-            skip <span aria-hidden="true">→</span>
-          </button>
-        )}
-      </header>
-
-      {/* the work */}
-      <main className="work">
-        <h1 className="word" ref={wordRef} aria-label="frgmt">
-          {skipped ? (
-            <span className="word-static">frgmt</span>
-          ) : showWord ? (
-            <Typewriter
-              script={wordScript}
-              start
-              caretAtRest={false}
-              className="word-tw"
-              ariaLabel="frgmt"
-              onDone={() => wordDoneRef.current?.()}
-            />
-          ) : (
-            <span className="word-static" style={{ visibility: "hidden" }}>
-              frgmt
-            </span>
-          )}
-        </h1>
-
-        <p className={`word-sub${built.typer ? " in" : ""}`}>small, finishable software</p>
-
-        <section className={`proj${built.typer ? " in" : ""}`} ref={projRef} aria-label={proj.name}>
-          <div className="proj-head">
-            <span className="proj-tag">now</span>
-            <h2 className="proj-name">
-              {skipped ? (
-                <span>{proj.name}</span>
-              ) : showName ? (
-                <Typewriter
-                  script={nameScript}
-                  start
-                  caretAtRest={false}
-                  className="name-tw"
-                  ariaLabel={proj.name}
-                  onDone={() => nameDoneRef.current?.()}
-                />
-              ) : (
-                <span style={{ visibility: "hidden" }}>{proj.name}</span>
-              )}
-            </h2>
-            <span className="proj-meta">
-              {proj.language} · ★{proj.stars} · {fmtDate(proj.updated)}
-            </span>
-          </div>
-          <div className="proj-body">
-            <p className="proj-desc">{proj.desc}</p>
-            <a className="proj-link" href={proj.url}>
-              → github.com/frgmt0/typer
-            </a>
-          </div>
-        </section>
-      </main>
-
-      {/* footer */}
-      <footer className="foot">
-        <div className="log" aria-hidden="true">
-          {log.slice(-5).map((line, i, arr) => (
-            <span key={`${line}-${i}`} data-last={i === arr.length - 1 ? "1" : undefined}>
-              {line}
-            </span>
-          ))}
-        </div>
-        <nav className={`foot-links${built.links ? " in" : ""}`} ref={linksRef} aria-label="elsewhere">
-          <a href="https://github.com/frgmt0">github</a>
-          <a href="https://kcodes.me">kcodes.me</a>
-          <span className="foot-coord">34.05°N 118.24°W</span>
-        </nav>
-      </footer>
     </div>
   );
 }
