@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import Ferrofluid from "./Ferrofluid";
-import FragmentField from "./FragmentField";
+import Blob from "./Blob";
+import Marks from "./Marks";
+import Typewriter, { typo, type Op } from "./Typewriter";
 import { fallbackRepos, type Repo } from "./repos";
 
 type NormalizedRepo = {
@@ -63,13 +64,20 @@ const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 export default function App() {
   const [repos, setRepos] = useState<NormalizedRepo[]>(() => fallbackRepos.map(normalizeRepo));
   const [source, setSource] = useState<"snapshot" | "live">("snapshot");
+  const [ready, setReady] = useState(false); // fetch settled (or timed out)
+  const [booted, setBooted] = useState(false); // boot assembly may begin
 
   const rowsRef = useRef(new Map<string, HTMLElement>());
   const strataRef = useRef(new Map<number, HTMLElement>());
   const railYearRef = useRef<HTMLSpanElement | null>(null);
 
+  // ---- data ----
   useEffect(() => {
     let cancelled = false;
+    const settle = () => {
+      if (!cancelled) setReady(true);
+    };
+    const safety = setTimeout(settle, 1600); // never let typing wait forever
     (async () => {
       try {
         const response = await fetch(
@@ -83,11 +91,29 @@ export default function App() {
         setSource("live");
       } catch {
         if (!cancelled) setSource("snapshot");
+      } finally {
+        clearTimeout(safety);
+        settle();
       }
     })();
     return () => {
       cancelled = true;
+      clearTimeout(safety);
     };
+  }, []);
+
+  // ---- boot gate: hold the assembly until the display font is in ----
+  useEffect(() => {
+    let done = false;
+    const go = () => {
+      if (done) return;
+      done = true;
+      requestAnimationFrame(() => setBooted(true));
+    };
+    const fonts = (document as Document & { fonts?: FontFaceSet }).fonts;
+    if (fonts?.ready) fonts.ready.then(go).catch(go);
+    const t = setTimeout(go, 600); // fallback if fonts.ready never resolves
+    return () => clearTimeout(t);
   }, []);
 
   const sorted = useMemo(
@@ -98,6 +124,12 @@ export default function App() {
     [repos]
   );
 
+  const indexOf = useMemo(() => {
+    const m = new Map<string, number>();
+    sorted.forEach((r, i) => m.set(r.name, i));
+    return m;
+  }, [sorted]);
+
   const byYear = useMemo(() => {
     const groups = new Map<number, NormalizedRepo[]>();
     for (const r of sorted) {
@@ -107,6 +139,62 @@ export default function App() {
     }
     return [...groups.entries()].sort((a, b) => b[0] - a[0]);
   }, [sorted]);
+
+  // marquee content from real data
+  const langs = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of sorted) if (r.language) counts.set(r.language, (counts.get(r.language) || 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([l]) => l);
+  }, [sorted]);
+
+  const marquee = useMemo(() => {
+    const parts = [
+      "THE INDEX",
+      `${sorted.length} FRAGMENTS`,
+      "GITHUB.COM/FRGMT0",
+      ...langs.map((l) => l.toUpperCase()),
+      "34.0522°N 118.2437°W",
+    ];
+    return parts.join("  /  ");
+  }, [sorted.length, langs]);
+
+  // ---- typed scripts ----
+  // hero tagline: a person fiddling with copy — typo+fix, a pause, a cut.
+  const taglineScript = useMemo<Op[]>(
+    () => [
+      { op: "type", text: "we " },
+      ...typo("biuld", "build"),
+      { op: "type", text: " digital experiences" },
+      { op: "pause", ms: 760 },
+      { op: "selBack", n: "experiences".length },
+      { op: "cut" },
+      { op: "pause", ms: 360 },
+      { op: "type", text: "fragments." },
+    ],
+    []
+  );
+
+  // topline status: a terminal edit that cuts a path, swaps the command,
+  // pastes the path back — then appends the *real* fetch result.
+  const statusScript = useMemo<Op[]>(() => {
+    const tail =
+      source === "live"
+        ? `  ·  ${sorted.length} live`
+        : `  ·  snapshot · ${sorted.length}`;
+    return [
+      { op: "type", text: "curl github.com/frgmt0", cps: 24 },
+      { op: "pause", ms: 520 },
+      { op: "selBack", n: "github.com/frgmt0".length },
+      { op: "cut" },
+      { op: "pause", ms: 220 },
+      { op: "back", n: "curl ".length },
+      { op: "pause", ms: 180 },
+      { op: "type", text: "open ", cps: 22 },
+      { op: "paste" },
+      { op: "pause", ms: 420 },
+      { op: "type", text: tail, cps: 26 },
+    ];
+  }, [source, sorted.length]);
 
   // Scene engine: one rAF loop drives pointer parallax (--px/--py on :root),
   // per-row focal depth (--f), the depth gauge (--depth), and the rail's
@@ -188,52 +276,86 @@ export default function App() {
     };
   }, [sorted]);
 
-  // cursor spotlight coordinates, per row
-  const onRowMove = (e: React.PointerEvent<HTMLElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    e.currentTarget.style.setProperty("--mx", `${e.clientX - rect.left}px`);
-    e.currentTarget.style.setProperty("--my", `${e.clientY - rect.top}px`);
-  };
-
   return (
     <>
-      <FragmentField />
-      <div className="site">
+      <Marks />
+      <div className={`site${booted ? " is-booted" : ""}`}>
         <header className="topline">
-          <span className="topline-brand">frgmt.xyz</span>
-          <span className="topline-status">
-            <span className={`dot${source === "live" ? " dot-live" : ""}`} aria-hidden="true" />
-            {source === "live" ? "live from github" : "bundled snapshot"}
+          <span className="topline-brand boot boot-1">frgmt.xyz</span>
+          <span className="topline-status boot boot-1">
+            <span className="prompt" aria-hidden="true">
+              →
+            </span>
+            <Typewriter
+              script={statusScript}
+              start={booted && ready}
+              caretAtRest={false}
+              className="tw tw-mono"
+              ariaLabel={
+                source === "live"
+                  ? `${sorted.length} repositories, live from github`
+                  : `${sorted.length} repositories, bundled snapshot`
+              }
+            />
           </span>
         </header>
 
         <section className="hero" aria-label="Introduction">
-          <Ferrofluid />
-          <h1 className="shard">
-            <span className="shard-sizer">frgmt</span>
-            <span className="shard-layer shard-ghost" aria-hidden="true">
-              frgmt
-            </span>
-            <span className="shard-layer shard-cut-a" aria-hidden="true">
-              frgmt
-            </span>
-            <span className="shard-layer shard-cut-b" aria-hidden="true">
-              frgmt
-            </span>
-            <span className="shard-layer shard-cut-c" aria-hidden="true">
-              frgmt
-            </span>
-          </h1>
+          <Blob />
 
-          <span className="hero-edge" aria-hidden="true">
+          <div className="hero-inner">
+            <h1 className="word boot" aria-label="frgmt">
+              <span className="word-size" aria-hidden="true">
+                frgmt
+              </span>
+              <span className="word-shard ws-ghost" aria-hidden="true">
+                <span className="word-piece" style={{ animationDelay: "40ms" }}>
+                  frgmt
+                </span>
+              </span>
+              <span className="word-shard ws-a" aria-hidden="true">
+                <span className="word-piece" style={{ animationDelay: "120ms" }}>
+                  frgmt
+                </span>
+              </span>
+              <span className="word-shard ws-b" aria-hidden="true">
+                <span className="word-piece" style={{ animationDelay: "210ms" }}>
+                  frgmt
+                </span>
+              </span>
+              <span className="word-shard ws-c" aria-hidden="true">
+                <span className="word-piece" style={{ animationDelay: "300ms" }}>
+                  frgmt
+                </span>
+              </span>
+            </h1>
+
+            <p className="tagline boot boot-3">
+              <Typewriter
+                script={taglineScript}
+                start={booted}
+                className="tw tw-tag"
+              />
+            </p>
+          </div>
+
+          <span className="hero-edge boot boot-2" aria-hidden="true">
             34.0522°N · 118.2437°W
           </span>
 
-          <div className="descend" aria-hidden="true">
-            <span className="descend-label">descend</span>
+          <div className="descend boot boot-3" aria-hidden="true">
+            <span className="descend-label">scroll</span>
             <span className="descend-line" />
           </div>
         </section>
+
+        <div className="marquee boot boot-2" aria-hidden="true">
+          <div className="marquee-track">
+            <span>{marquee}</span>
+            <span>{marquee}</span>
+            <span>{marquee}</span>
+          </div>
+        </div>
 
         <section className="dig" aria-label="Repository index">
           <aside className="rail" aria-hidden="true">
@@ -246,7 +368,7 @@ export default function App() {
           </aside>
 
           <div className="strata">
-            {byYear.map(([year, list]) => (
+            {byYear.map(([year, list], gi) => (
               <section
                 key={year}
                 className="stratum"
@@ -262,42 +384,43 @@ export default function App() {
                   <span className="stratum-year">{year}</span>
                   <span className="stratum-rule" aria-hidden="true" />
                   <span className="stratum-count">
-                    {list.length} {list.length === 1 ? "fragment" : "fragments"}
+                    [{String(list.length).padStart(2, "0")}]
                   </span>
                 </header>
 
-                {list.map((r) => (
-                  <article
-                    key={r.name}
-                    className="row"
-                    onPointerMove={onRowMove}
-                    ref={(el) => {
-                      if (el) rowsRef.current.set(r.name, el);
-                      else rowsRef.current.delete(r.name);
-                    }}
-                  >
-                    <span className="row-date">{formatDate(r.updated_at)}</span>
-                    <div className="row-main">
-                      <h3 className="row-name">
-                        <a href={r.url}>{r.name}</a>
-                      </h3>
-                      {r.description && <p className="row-desc">{r.description}</p>}
-                    </div>
-                    <div className="row-meta">
-                      {r.language && <span className="row-lang">{r.language}</span>}
-                      {r.stars > 0 && (
-                        <span className="row-stars">
-                          {r.stars} {r.stars === 1 ? "star" : "stars"}
-                        </span>
-                      )}
-                      {r.homepage && (
-                        <a className="row-live" href={r.homepage}>
-                          live
-                        </a>
-                      )}
-                    </div>
-                  </article>
-                ))}
+                {list.map((r, ri) => {
+                  const n = indexOf.get(r.name) ?? gi * 100 + ri;
+                  return (
+                    <article
+                      key={r.name}
+                      className="row"
+                      ref={(el) => {
+                        if (el) rowsRef.current.set(r.name, el);
+                        else rowsRef.current.delete(r.name);
+                      }}
+                    >
+                      <span className="row-no" aria-hidden="true">
+                        {String(n + 1).padStart(2, "0")}
+                      </span>
+                      <span className="row-date">{formatDate(r.updated_at)}</span>
+                      <div className="row-main">
+                        <h3 className="row-name">
+                          <a href={r.url}>{r.name}</a>
+                        </h3>
+                        {r.description && <p className="row-desc">{r.description}</p>}
+                      </div>
+                      <div className="row-meta">
+                        {r.language && <span className="row-lang">{r.language}</span>}
+                        {r.stars > 0 && <span className="row-stars">★ {r.stars}</span>}
+                        {r.homepage && (
+                          <a className="row-site" href={r.homepage} aria-label="visit site">
+                            ↗
+                          </a>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
               </section>
             ))}
           </div>
@@ -306,8 +429,7 @@ export default function App() {
         <footer className="end">
           <p>
             Pulled live from <a href="https://github.com/frgmt0">github.com/frgmt0</a> on
-            load; falls back to a bundled snapshot when github won't answer. Bedrock
-            reached.
+            load; falls back to a bundled snapshot when github won't answer.
           </p>
           <p className="end-links">
             <a href="https://github.com/frgmt0">github</a>

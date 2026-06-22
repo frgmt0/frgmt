@@ -1,15 +1,24 @@
 import { memo, useEffect, useRef } from "react";
 
+/* ============================================================
+   Blob — a raymarched metaball lump, shaded as a flat halftone.
+   The spring/magnet particle sim (pointer = magnet) feeds metaball
+   centers into a smooth-min SDF; the surface is lit cheaply and then
+   crushed through an 8x8 Bayer ordered-dither into the poster palette
+   (ink -> pink -> paper, red where the cursor catches it). No reflections,
+   no gradients — just chunky dots, like a screenprint that breathes.
+   ============================================================ */
+
 type P = {
   x: number;
   y: number;
   vx: number;
   vy: number;
-  r: number; // metaball radius (px)
-  a: number; // rest angle around the anchor
-  rest: number; // rest distance from the anchor
-  wob: number; // wobble phase
-  zw: number; // z-wobble phase
+  r: number;
+  a: number;
+  rest: number;
+  wob: number;
+  zw: number;
 };
 
 const N = 13;
@@ -19,11 +28,6 @@ attribute vec2 aPos;
 void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
 `;
 
-// Raymarched liquid chrome. The spring/magnet particle sim feeds metaball
-// centers into a smooth-min SDF; surface normals reflect a real photographic
-// environment — the Poly Haven "empty warehouse" HDRI (CC0), tone-mapped to
-// PNG at build time and re-expanded in-shader. Real ceiling lights and a
-// concrete floor are what make chrome read as chrome.
 const FRAG = `
 precision highp float;
 #define N ${N}
@@ -33,10 +37,15 @@ uniform vec3 uB[N];
 uniform float uR[N];
 uniform vec2 uMouse;
 uniform float uTime;
-uniform sampler2D uEnv;
+uniform float uPx;     // dither cell size, device px
+uniform float uBuild;  // 0..1 boot reveal
 
-// surface-tension ripples + dents — keeps the skin from reading as
-// mathematically perfect, which is what sells molten metal
+// compact ordered-dither (Bayer 8x8 without an array lookup)
+float bayer2(vec2 a){ a = floor(a); return fract(a.x / 2.0 + a.y * a.y * 0.75); }
+float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+float bayer8(vec2 a){ return bayer4(0.5 * a) * 0.25 + bayer2(a); }
+
+// surface-tension ripples so the skin never reads as perfectly smooth
 float ripple(vec3 p) {
   float n = sin(p.x * 9.0 + uTime * 0.7) * sin(p.y * 8.0 - uTime * 0.9) * sin(p.z * 7.0 + uTime * 0.5);
   n += 0.55 * sin(p.x * 17.0 - uTime * 1.3) * sin(p.y * 15.0 + uTime * 1.1);
@@ -63,18 +72,6 @@ vec3 getNormal(vec3 p) {
   ));
 }
 
-vec3 envSample(vec3 r) {
-  // equirect lookup, yaw-rotated so a photogenic slice faces the camera
-  float u = atan(r.x, -r.z) * 0.15915494 + 0.5 + 0.18;
-  float v = 0.5 - asin(clamp(r.y, -1.0, 1.0)) * 0.31830989;
-  vec3 c = texture2D(uEnv, vec2(u, v)).rgb;
-  // back to ~linear, then re-punch the highlights the tonemap compressed
-  c = pow(c, vec3(2.2));
-  float hot = smoothstep(0.55, 1.0, max(c.r, max(c.g, c.b)));
-  c *= 1.0 + hot * 3.0;
-  return c;
-}
-
 void main() {
   vec2 uv = (gl_FragCoord.xy / uRes * 2.0 - 1.0) * uHalf;
   vec3 ro = vec3(uv, 3.0);
@@ -92,42 +89,50 @@ void main() {
     if (t > 6.0) break;
   }
 
+  vec2 cell = gl_FragCoord.xy / uPx;
+  float thr = bayer8(cell);
+
   if (hit < 0.0) {
-    // thin fringe just past the silhouette, doubles as edge AA
-    float aa = smoothstep(0.012, 0.0, dmin) * 0.25;
-    gl_FragColor = vec4(vec3(0.7, 0.71, 0.74) * aa, aa);
+    gl_FragColor = vec4(0.0);
     return;
   }
 
   vec3 p = ro + rd * hit;
   vec3 n = getNormal(p);
-  vec3 r = reflect(rd, n);
-
-  // chrome = the environment, almost verbatim
-  vec3 col = envSample(r) * 0.96;
 
   float ndv = max(dot(n, -rd), 0.0);
-  float fr = pow(1.0 - ndv, 3.0);
+  float fr = pow(1.0 - ndv, 2.4);
+  vec3 L = normalize(vec3(-0.45, 0.8, 0.65));
+  float dif = max(dot(n, L), 0.0);
+  float lum = 0.16 + 0.66 * dif + 0.4 * fr;
 
-  // slight grazing-angle lift + a whisper of thin-film color in the rim
-  col *= 1.0 + fr * 0.5;
-  vec3 irid = 0.5 + 0.5 * cos(6.28318 * (fr * 1.4 + vec3(0.0, 0.33, 0.66)));
-  col += irid * fr * 0.08;
-
-  // cursor gleam so the spikes catch light as they reach for the pointer
+  // cursor key light — the spikes flare red as they reach the pointer
   vec3 Lm = normalize(vec3(uMouse - p.xy, 0.8));
-  col += vec3(1.0, 0.97, 0.93) * pow(max(dot(n, Lm), 0.0), 40.0) * 0.45;
+  float spec = pow(max(dot(n, Lm), 0.0), 28.0);
+  lum += spec * 0.7;
+  lum = clamp(lum * uBuild, 0.0, 1.0);
 
-  // exposure + tonemap + gamma
-  col *= 1.35;
-  col = col / (col + 1.0);
-  col = pow(col, vec3(0.4545));
+  vec3 paper = vec3(0.949, 0.949, 0.949);
+  vec3 pink  = vec3(0.918, 0.843, 0.886);
+  vec3 dark  = vec3(0.07, 0.07, 0.085);
+  vec3 red   = vec3(0.898, 0.224, 0.275);
 
-  gl_FragColor = vec4(col, 1.0);
+  // two ordered thresholds give three tonal bands without banding
+  float qHi = step(thr, (lum - 0.5) * 2.0);   // paper vs pink
+  float qLo = step(thr, lum * 2.0);           // pink vs dark
+  vec3 col = mix(pink, paper, qHi);
+  col = mix(dark, col, qLo);
+  // hot rim near the cursor punches through to red
+  col = mix(col, red, step(thr, spec * 1.3) * step(0.25, spec));
+
+  // silhouette stays crisp; one-cell dithered AA on the very edge
+  float edge = smoothstep(0.010, 0.0, dmin);
+  float a = max(step(thr, 0.6) * (1.0 - edge), edge);
+  gl_FragColor = vec4(col, a);
 }
 `;
 
-export default memo(function Ferrofluid() {
+export default memo(function Blob() {
   const ref = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -140,10 +145,9 @@ export default memo(function Ferrofluid() {
       depth: false,
       stencil: false,
     });
-    if (!gl) return; // no WebGL — the hero just stays atmospheric
+    if (!gl) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    // --- GL setup ---
     const compile = (type: number, src: string) => {
       const sh = gl.createShader(type)!;
       gl.shaderSource(sh, src);
@@ -166,14 +170,12 @@ export default memo(function Ferrofluid() {
       return;
     }
     gl.useProgram(prog);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
     const quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
-    gl.bufferData(
-      gl.ARRAY_BUFFER,
-      new Float32Array([-1, -1, 3, -1, -1, 3]),
-      gl.STATIC_DRAW
-    );
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     const aPos = gl.getAttribLocation(prog, "aPos");
     gl.enableVertexAttribArray(aPos);
     gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
@@ -185,35 +187,20 @@ export default memo(function Ferrofluid() {
       radii: gl.getUniformLocation(prog, "uR[0]"),
       mouse: gl.getUniformLocation(prog, "uMouse"),
       time: gl.getUniformLocation(prog, "uTime"),
-      env: gl.getUniformLocation(prog, "uEnv"),
+      px: gl.getUniformLocation(prog, "uPx"),
+      build: gl.getUniformLocation(prog, "uBuild"),
     };
 
-    // environment texture — render starts once the warehouse is in VRAM
-    let envReady = false;
-    const tex = gl.createTexture();
-    const img = new Image();
-    img.onload = () => {
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.uniform1i(loc.env, 0);
-      envReady = true;
-      if (reduced) render();
-    };
-    img.src = "/warehouse.png";
-
-    // --- simulation state ---
     let w = 0;
     let h = 0;
-    let S = 1; // px → scene-unit divisor
+    let S = 1;
+    let dpr = 1;
     let raf = 0;
     let t = 0;
+    let build = reduced ? 1 : 0;
     let mx = -1e4;
     let my = -1e4;
-    let pvx = 0; // pointer velocity, px/frame-ish
+    let pvx = 0;
     let pvy = 0;
     let parts: P[] = [];
     let cx = 0;
@@ -223,12 +210,10 @@ export default memo(function Ferrofluid() {
 
     const seed = () => {
       cx = w * 0.5;
-      cy = h * 0.4;
-      const base = Math.min(w, h) * 0.135;
+      cy = h * 0.52;
+      const base = Math.min(w, h) * 0.125;
       parts = Array.from({ length: N }, (_, i) => {
         const a = (i / N) * Math.PI * 2;
-        // wildly uneven rest shape — the idle blob is already a lump,
-        // never a circle
         const rest = base * (0.3 + Math.random() * 1.0);
         return {
           x: cx + Math.cos(a) * rest,
@@ -246,13 +231,13 @@ export default memo(function Ferrofluid() {
 
     const step = () => {
       t += 1;
+      if (build < 1) build = Math.min(1, build + 0.012);
       const m = Math.min(w, h);
       const drift = m * 0.05;
       let acx = cx + Math.sin(t * 0.005) * drift + Math.sin(t * 0.0023 + 2.1) * drift * 0.7;
       let acy = cy + Math.cos(t * 0.0037) * drift * 0.8 + Math.cos(t * 0.0019) * drift * 0.5;
       const R = m * 0.75;
 
-      // the whole mass leans toward the magnet, not just the near surface
       const adx = mx - acx;
       const ady = my - acy;
       const ad = Math.hypot(adx, ady);
@@ -263,14 +248,12 @@ export default memo(function Ferrofluid() {
       }
 
       for (const p of parts) {
-        // deeper breathing, looser orbit
         const wob = 1 + 0.34 * Math.sin(t * 0.013 + p.wob);
         const txp = acx + Math.cos(p.a + t * 0.0032) * p.rest * wob;
         const typ = acy + Math.sin(p.a + t * 0.0032) * p.rest * wob;
         p.vx += (txp - p.x) * 0.007;
         p.vy += (typ - p.y) * 0.007;
 
-        // long-range magnet with a violent close-range ramp
         const dx = mx - p.x;
         const dy = my - p.y;
         const d = Math.hypot(dx, dy);
@@ -278,7 +261,6 @@ export default memo(function Ferrofluid() {
           const pull = (1 - d / R) ** 1.6 * 2.6;
           p.vx += (dx / d) * pull;
           p.vy += (dy / d) * pull;
-          // fast swipes fling the fluid — splash, don't just attract
           p.vx += pvx * (1 - d / R) * 0.18;
           p.vy += pvy * (1 - d / R) * 0.18;
         }
@@ -289,8 +271,6 @@ export default memo(function Ferrofluid() {
         p.y += p.vy;
       }
 
-      // mutual repulsion: conserves apparent volume when the magnet drags
-      // everything one way, and keeps the lumps lumpy
       for (let i = 0; i < N; i++) {
         const a = parts[i];
         for (let j = i + 1; j < N; j++) {
@@ -311,13 +291,11 @@ export default memo(function Ferrofluid() {
         }
       }
 
-      // pointer velocity decays between move events
       pvx *= 0.8;
       pvy *= 0.8;
     };
 
     const render = () => {
-      if (!envReady) return;
       for (let i = 0; i < N; i++) {
         const p = parts[i];
         ballData[i * 3] = (p.x - w / 2) / S;
@@ -329,6 +307,7 @@ export default memo(function Ferrofluid() {
       gl.uniform1fv(loc.radii, radiusData);
       gl.uniform2f(loc.mouse, (mx - w / 2) / S, -(my - h / 2) / S);
       gl.uniform1f(loc.time, t * 0.016);
+      gl.uniform1f(loc.build, build);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -337,13 +316,13 @@ export default memo(function Ferrofluid() {
     const frame = () => {
       raf = requestAnimationFrame(frame);
       const rect = canvas.getBoundingClientRect();
-      if (rect.bottom < 0) return; // hero scrolled away
+      if (rect.bottom < 0) return;
       step();
       render();
     };
 
     const resize = () => {
-      const dpr = Math.min(1.5, window.devicePixelRatio || 1);
+      dpr = Math.min(1.5, window.devicePixelRatio || 1);
       w = canvas.clientWidth;
       h = canvas.clientHeight;
       canvas.width = Math.max(2, Math.floor(w * dpr));
@@ -352,6 +331,7 @@ export default memo(function Ferrofluid() {
       S = Math.min(w, h) * 0.3;
       gl.uniform2f(loc.res, canvas.width, canvas.height);
       gl.uniform2f(loc.half, w / (2 * S), h / (2 * S));
+      gl.uniform1f(loc.px, Math.max(2, Math.round(2.6 * dpr)));
       seed();
       if (reduced) render();
     };
@@ -361,8 +341,6 @@ export default memo(function Ferrofluid() {
       const nx = e.clientX - rect.left;
       const ny = e.clientY - rect.top;
       if (mx > -1e3) {
-        // accumulate swipe velocity, clamped so a teleporting cursor
-        // (tab-in, edge re-entry) can't detonate the blob
         pvx = Math.max(-40, Math.min(40, pvx + (nx - mx) * 0.5));
         pvy = Math.max(-40, Math.min(40, pvy + (ny - my) * 0.5));
       }
@@ -391,5 +369,5 @@ export default memo(function Ferrofluid() {
     };
   }, []);
 
-  return <canvas ref={ref} className="ferro" aria-hidden="true" />;
+  return <canvas ref={ref} className="blob" aria-hidden="true" />;
 });
