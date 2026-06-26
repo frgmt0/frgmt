@@ -29,8 +29,50 @@ the GitHub API (`github.com/frgmt0`) in the browser.
 ## Commands
 
 ```sh
-bun run dev      # development server
-bun run check    # TypeScript check
+bun run dev      # development server (Vite, splash only)
+bun run check    # TypeScript check (splash + worker)
 bun run build    # production build
 bun run preview  # preview production build
+bun run deploy   # vite build + wrangler deploy
+```
+
+## Blog CMS
+
+A self-hosted CMS lives in the same Worker, backed by the existing
+`kona-blog-db` D1 database (the `posts` table the public blog already reads).
+The splash site is untouched — only `/admin` and `/api/*` are routed to the
+Worker (`run_worker_first`); everything else serves static assets.
+
+- `/admin` — login + markdown editor (live preview, draft/publish, auto
+  slug/excerpt, search, manage existing posts, mobile-friendly). Self-contained,
+  no client framework or CDN.
+- `/api/*` — JSON API (auth + posts CRUD).
+
+### Auth (rolled our own, hardened)
+
+- Passwords: PBKDF2-SHA256, 210k iterations, 16-byte salt (WebCrypto).
+- Sessions: 32 random bytes in a `__Host-session` cookie (`HttpOnly`, `Secure`,
+  `SameSite=Strict`); only the SHA-256 of the token is stored in D1.
+- CSRF token required on every mutating request; constant-time comparisons.
+- Per-IP login throttling (8 attempts / 15 min); uniform timing on bad users.
+- Strict CSP + security headers on the admin app; `noindex`.
+
+Tables (`admin_users`, `sessions`, `login_attempts`) are added by an additive
+`IF NOT EXISTS` migration that never touches `posts`.
+
+### Setup
+
+```sh
+bun run cms:migrate         # apply auth tables to remote D1 (one-time)
+bun run cms:create-admin    # create/update the admin user (prompts)
+bun run deploy              # build + deploy
+# then visit https://frgmt.xyz/admin
+```
+
+Local development (uses a separate local D1 — seed it first):
+
+```sh
+bun run cms:migrate:local
+node scripts/create-admin.mjs --local
+bun run cms:dev             # wrangler dev on http://localhost:8787
 ```

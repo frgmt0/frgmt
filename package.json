@@ -7,7 +7,12 @@
     "dev": "bunx --bun vite --host 0.0.0.0",
     "build": "bunx --bun vite build",
     "preview": "bunx --bun vite preview --host 0.0.0.0",
-    "check": "bunx --bun tsc --noEmit"
+    "check": "bunx --bun tsc --noEmit && bunx --bun tsc --noEmit -p worker/tsconfig.json",
+    "cms:migrate": "wrangler d1 execute kona-blog-db --remote --file=migrations/0001_cms.sql",
+    "cms:migrate:local": "wrangler d1 execute kona-blog-db --local --file=migrations/0001_cms.sql",
+    "cms:create-admin": "node scripts/create-admin.mjs",
+    "cms:dev": "wrangler dev",
+    "deploy": "bunx --bun vite build && wrangler deploy"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
@@ -18,5 +23,8 @@
     "@types/react": "latest",
     "@types/react-dom": "latest"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "wrangler": "latest"
+  }
 }

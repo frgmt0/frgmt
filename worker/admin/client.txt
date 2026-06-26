@@ -1,0 +1,514 @@
+/* frgmt cms — admin client. vanilla, no deps. served as /admin/app.js. */
+(function () {
+  "use strict";
+
+  var state = {
+    csrf: null,
+    username: null,
+    view: "loading", // loading | login | list | editor
+    posts: [],
+    filter: "all",
+    query: "",
+    editing: null, // post object or {new:true}
+    dirty: false,
+    pane: "write",
+  };
+
+  var app = document.getElementById("app");
+
+  /* ---------------- api ---------------- */
+
+  function api(method, path, body) {
+    var headers = {};
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (state.csrf && method !== "GET") headers["X-CSRF-Token"] = state.csrf;
+    return fetch("/api" + path, {
+      method: method,
+      headers: headers,
+      credentials: "same-origin",
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    }).then(function (r) {
+      return r
+        .json()
+        .catch(function () {
+          return {};
+        })
+        .then(function (data) {
+          if (!r.ok) {
+            var msg = (data && data.error) || "request failed (" + r.status + ")";
+            var e = new Error(msg);
+            e.status = r.status;
+            throw e;
+          }
+          return data;
+        });
+    });
+  }
+
+  /* ---------------- helpers ---------------- */
+
+  function el(tag, attrs, kids) {
+    var n = document.createElement(tag);
+    if (attrs) {
+      for (var k in attrs) {
+        if (k === "class") n.className = attrs[k];
+        else if (k === "text") n.textContent = attrs[k];
+        else if (k === "html") n.innerHTML = attrs[k];
+        else if (k.slice(0, 2) === "on") n.addEventListener(k.slice(2).toLowerCase(), attrs[k]);
+        else if (attrs[k] != null && attrs[k] !== false) n.setAttribute(k, attrs[k]);
+      }
+    }
+    (kids || []).forEach(function (c) {
+      if (c == null) return;
+      n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    });
+    return n;
+  }
+
+  function clear() {
+    while (app.firstChild) app.removeChild(app.firstChild);
+  }
+
+  function fmtDate(s) {
+    if (!s) return "";
+    var d = new Date(s.replace(" ", "T") + "Z");
+    if (isNaN(d.getTime())) return s;
+    return (
+      d.getFullYear() +
+      "." +
+      String(d.getMonth() + 1).padStart(2, "0") +
+      "." +
+      String(d.getDate()).padStart(2, "0")
+    );
+  }
+
+  function slugify(t) {
+    return (
+      t
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "post"
+    );
+  }
+
+  /* ---------------- markdown (preview only; output is escaped first) ---------------- */
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function inlineMd(s) {
+    var tokens = [];
+    function stash(html) {
+      tokens.push(html);
+      return "\u0000" + (tokens.length - 1) + "\u0000";
+    }
+    // inline code first, so its contents are never reformatted
+    s = s.replace(/`([^`]+)`/g, function (_, c) {
+      return stash("<code>" + c + "</code>");
+    });
+    // images
+    s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, function (_, alt, url) {
+      if (!/^https?:|^\//.test(url)) return alt;
+      return stash('<img src="' + url + '" alt="' + alt + '" loading="lazy">');
+    });
+    // links
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (_, txt, url) {
+      var safe = /^(https?:|\/|#|mailto:)/.test(url) ? url : "#";
+      var ext = /^https?:/.test(safe);
+      return stash(
+        '<a href="' + safe + '"' + (ext ? ' target="_blank" rel="noopener noreferrer"' : "") + ">" + txt + "</a>"
+      );
+    });
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+    s = s.replace(/(^|[^*])\*([^*\s][^*]*?)\*/g, "$1<em>$2</em>");
+    s = s.replace(/(^|[^_])_([^_\s][^_]*?)_/g, "$1<em>$2</em>");
+    s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+    // restore protected tokens
+    s = s.replace(/\u0000(\d+)\u0000/g, function (_, i) {
+      return tokens[+i];
+    });
+    return s;
+  }
+
+  function renderMd(src) {
+    var lines = escapeHtml(src || "").split("\n");
+    var out = [];
+    var i = 0;
+    function flushList(tag, items) {
+      out.push("<" + tag + ">" + items.map(function (it) { return "<li>" + inlineMd(it) + "</li>"; }).join("") + "</" + tag + ">");
+    }
+    while (i < lines.length) {
+      var line = lines[i];
+
+      // code fence
+      var fence = line.match(/^```(.*)$/);
+      if (fence) {
+        var buf = [];
+        i++;
+        while (i < lines.length && !/^```\s*$/.test(lines[i])) buf.push(lines[i++]);
+        i++; // closing fence
+        out.push("<pre><code>" + buf.join("\n") + "</code></pre>");
+        continue;
+      }
+      // blank
+      if (/^\s*$/.test(line)) { i++; continue; }
+      // hr
+      if (/^\s*(\*\*\*+|---+|___+)\s*$/.test(line)) { out.push("<hr>"); i++; continue; }
+      // heading
+      var h = line.match(/^(#{1,6})\s+(.*)$/);
+      if (h) { var lvl = h[1].length; out.push("<h" + lvl + ">" + inlineMd(h[2]) + "</h" + lvl + ">"); i++; continue; }
+      // blockquote
+      if (/^\s*&gt;\s?/.test(line)) {
+        var q = [];
+        while (i < lines.length && /^\s*&gt;\s?/.test(lines[i])) q.push(lines[i++].replace(/^\s*&gt;\s?/, ""));
+        out.push("<blockquote>" + inlineMd(q.join(" ")) + "</blockquote>");
+        continue;
+      }
+      // unordered list
+      if (/^\s*[-*+]\s+/.test(line)) {
+        var u = [];
+        while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) u.push(lines[i++].replace(/^\s*[-*+]\s+/, ""));
+        flushList("ul", u);
+        continue;
+      }
+      // ordered list
+      if (/^\s*\d+\.\s+/.test(line)) {
+        var o = [];
+        while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) o.push(lines[i++].replace(/^\s*\d+\.\s+/, ""));
+        flushList("ol", o);
+        continue;
+      }
+      // paragraph (gather until blank or block start)
+      var p = [];
+      while (
+        i < lines.length &&
+        !/^\s*$/.test(lines[i]) &&
+        !/^(#{1,6})\s+/.test(lines[i]) &&
+        !/^```/.test(lines[i]) &&
+        !/^\s*(\*\*\*+|---+|___+)\s*$/.test(lines[i]) &&
+        !/^\s*[-*+]\s+/.test(lines[i]) &&
+        !/^\s*\d+\.\s+/.test(lines[i]) &&
+        !/^\s*&gt;\s?/.test(lines[i])
+      ) {
+        p.push(lines[i++]);
+      }
+      out.push("<p>" + inlineMd(p.join("<br>")) + "</p>");
+    }
+    return out.join("\n");
+  }
+
+  /* ---------------- views ---------------- */
+
+  function showError(container, msg) {
+    container.appendChild(el("div", { class: "err", role: "alert", text: msg }));
+  }
+
+  function renderLogin(errMsg) {
+    clear();
+    state.view = "login";
+    var user = el("input", { type: "text", name: "username", autocomplete: "username", required: "", "aria-label": "username" });
+    var pass = el("input", { type: "password", name: "password", autocomplete: "current-password", required: "", "aria-label": "password" });
+    var btn = el("button", { type: "submit", class: "primary", text: "enter" });
+    var form = el("form", {
+      onsubmit: function (e) {
+        e.preventDefault();
+        btn.disabled = true;
+        api("POST", "/login", { username: user.value, password: pass.value })
+          .then(function (data) {
+            state.csrf = data.csrf;
+            state.username = data.username;
+            loadList();
+          })
+          .catch(function (err) {
+            btn.disabled = false;
+            pass.value = "";
+            renderLogin(err.message);
+            var u = app.querySelector('input[name="username"]');
+            if (u) u.value = user.value;
+          });
+      },
+    }, [
+      el("h1", { class: "brand" }, ["frgmt ", el("small", { class: "muted", text: "/cms" })]),
+      el("p", { class: "muted", text: "sign in to write." }),
+      errMsg ? el("div", { class: "err", role: "alert", text: errMsg }) : null,
+      el("div", { class: "field" }, [el("label", { text: "username" }), user]),
+      el("div", { class: "field" }, [el("label", { text: "password" }), pass]),
+      btn,
+    ]);
+    app.appendChild(el("div", { class: "login" }, [form]));
+    user.focus();
+  }
+
+  function topBar() {
+    return el("header", { class: "bar" }, [
+      el("span", { class: "logo", text: "frgmt/cms" }),
+      el("span", { class: "grow muted", text: state.username ? "@" + state.username : "" }),
+      el("button", {
+        class: "ghost",
+        text: "logout",
+        onclick: function () {
+          api("POST", "/logout").catch(function () {}).then(function () {
+            state.csrf = null;
+            state.username = null;
+            renderLogin();
+          });
+        },
+      }),
+    ]);
+  }
+
+  function loadList() {
+    state.view = "list";
+    var q = "?status=" + encodeURIComponent(state.filter) + (state.query ? "&q=" + encodeURIComponent(state.query) : "");
+    return api("GET", "/posts" + q)
+      .then(function (data) {
+        state.posts = data.posts || [];
+        renderList();
+      })
+      .catch(function (err) {
+        if (err.status === 401) return renderLogin();
+        renderList(err.message);
+      });
+  }
+
+  function renderList(errMsg) {
+    clear();
+    app.appendChild(topBar());
+
+    var search = el("input", {
+      type: "search",
+      class: "grow",
+      placeholder: "search title or slug…",
+      value: state.query,
+      "aria-label": "search posts",
+    });
+    var searchTimer = null;
+    search.addEventListener("input", function () {
+      clearTimeout(searchTimer);
+      state.query = search.value;
+      searchTimer = setTimeout(loadList, 220);
+    });
+
+    function segBtn(key, label) {
+      return el("button", {
+        text: label,
+        "aria-pressed": state.filter === key ? "true" : "false",
+        onclick: function () {
+          state.filter = key;
+          loadList();
+        },
+      });
+    }
+
+    var toolbar = el("div", { class: "row toolbar" }, [
+      el("button", { class: "primary", text: "+ new post", onclick: function () { openEditor({ isNew: true }); } }),
+      el("div", { class: "seg" }, [segBtn("all", "all"), segBtn("published", "published"), segBtn("draft", "drafts")]),
+      search,
+    ]);
+
+    var main = el("main", {}, [toolbar]);
+    if (errMsg) showError(main, errMsg);
+
+    if (!state.posts.length) {
+      main.appendChild(el("div", { class: "empty", text: state.query ? "no matches." : "no posts yet — write one." }));
+    } else {
+      var list = el("div", { class: "list" });
+      state.posts.forEach(function (p) {
+        var badge = p.published
+          ? el("span", { class: "badge pub", text: "live" })
+          : el("span", { class: "badge draft", text: "draft" });
+        list.appendChild(
+          el("div", { class: "item" }, [
+            el("h3", {}, [document.createTextNode(p.title), badge]),
+            el("div", { class: "meta", text: "/" + p.slug + " · updated " + fmtDate(p.updated_at) }),
+            el("div", { class: "actions" }, [
+              el("button", { text: "edit", onclick: function () { openEditor({ id: p.id }); } }),
+              el("button", {
+                class: "danger",
+                text: "delete",
+                onclick: function () { confirmDelete(p); },
+              }),
+            ]),
+          ])
+        );
+      });
+      main.appendChild(list);
+    }
+    app.appendChild(main);
+  }
+
+  function confirmDelete(p) {
+    if (!window.confirm('delete "' + p.title + '"? this cannot be undone.')) return;
+    api("DELETE", "/posts/" + p.id)
+      .then(loadList)
+      .catch(function (err) {
+        window.alert(err.message);
+      });
+  }
+
+  /* ---------------- editor ---------------- */
+
+  function openEditor(opts) {
+    if (opts.isNew) {
+      state.editing = { isNew: true, id: null, title: "", slug: "", content: "", excerpt: "", published: 0, slugTouched: false };
+      renderEditor();
+      return;
+    }
+    api("GET", "/posts/" + opts.id)
+      .then(function (data) {
+        var p = data.post;
+        p.isNew = false;
+        p.slugTouched = true;
+        state.editing = p;
+        renderEditor();
+      })
+      .catch(function (err) {
+        if (err.status === 401) return renderLogin();
+        window.alert(err.message);
+      });
+  }
+
+  function renderEditor() {
+    clear();
+    state.view = "editor";
+    state.dirty = false;
+    var p = state.editing;
+
+    app.appendChild(topBar());
+
+    var titleInput = el("input", { type: "text", placeholder: "title", value: p.title, "aria-label": "title" });
+    var slugInput = el("input", { type: "text", placeholder: "slug", value: p.slug, "aria-label": "slug" });
+    var content = el("textarea", { placeholder: "# write in markdown…", spellcheck: "true", "aria-label": "content" });
+    content.value = p.content;
+    var excerpt = el("textarea", { placeholder: "excerpt (auto from first line if blank)", "aria-label": "excerpt", style: "min-height:64px" });
+    excerpt.value = p.excerpt || "";
+    var preview = el("div", { class: "md" });
+
+    function syncPreview() { preview.innerHTML = renderMd(content.value); }
+    function markDirty() { state.dirty = true; saveState.textContent = "unsaved changes"; }
+
+    titleInput.addEventListener("input", function () {
+      p.title = titleInput.value;
+      if (!p.slugTouched) {
+        slugInput.value = slugify(titleInput.value);
+      }
+      markDirty();
+    });
+    slugInput.addEventListener("input", function () { p.slugTouched = true; markDirty(); });
+    content.addEventListener("input", function () { syncPreview(); markDirty(); });
+    excerpt.addEventListener("input", markDirty);
+
+    // pane tabs (mobile)
+    function paneBtn(key, label) {
+      return el("button", {
+        text: label,
+        "aria-pressed": state.pane === key ? "true" : "false",
+        onclick: function () {
+          state.pane = key;
+          editor.setAttribute("data-pane", key);
+          [].forEach.call(tabs.children, function (b) {
+            b.setAttribute("aria-pressed", b.textContent === label ? "true" : "false");
+          });
+          if (key === "preview") syncPreview();
+        },
+      });
+    }
+    var tabs = el("div", { class: "row pane-tabs" }, [paneBtn("write", "write"), paneBtn("preview", "preview")]);
+
+    var panes = el("div", { class: "panes" }, [
+      el("div", { class: "write" }, [content]),
+      el("div", { class: "preview" }, [el("div", { class: "preview-label", text: "preview" }), preview]),
+    ]);
+
+    var pubToggle = el("input", { type: "checkbox" });
+    pubToggle.checked = !!p.published;
+    pubToggle.addEventListener("change", markDirty);
+
+    var saveBtn = el("button", { class: "primary", text: p.isNew ? "create" : "save" });
+    var saveState = el("span", { class: "save-state muted", text: p.isNew ? "new draft" : "" });
+
+    saveBtn.addEventListener("click", function () {
+      if (!titleInput.value.trim()) { window.alert("title is required."); titleInput.focus(); return; }
+      saveBtn.disabled = true;
+      saveState.textContent = "saving…";
+      var payload = {
+        title: titleInput.value,
+        slug: slugInput.value,
+        content: content.value,
+        excerpt: excerpt.value,
+        published: pubToggle.checked,
+      };
+      var req = p.isNew ? api("POST", "/posts", payload) : api("PUT", "/posts/" + p.id, payload);
+      req
+        .then(function (data) {
+          state.editing = data.post;
+          state.editing.isNew = false;
+          state.editing.slugTouched = true;
+          renderEditor();
+          var ss = app.querySelector(".save-state");
+          if (ss) ss.textContent = "saved · " + fmtDate(data.post.updated_at);
+        })
+        .catch(function (err) {
+          saveBtn.disabled = false;
+          if (err.status === 401) return renderLogin();
+          saveState.textContent = "";
+          window.alert(err.message);
+        });
+    });
+
+    var foot = el("div", { class: "editor-foot" }, [
+      el("label", { class: "switch" }, [pubToggle, el("span", { text: "published" })]),
+      el("span", { class: "grow" }, [saveState]),
+      saveBtn,
+    ]);
+
+    var head = el("div", { class: "row editor-head" }, [
+      el("button", {
+        class: "ghost",
+        text: "← back",
+        onclick: function () {
+          if (state.dirty && !window.confirm("discard unsaved changes?")) return;
+          loadList();
+        },
+      }),
+      el("div", { class: "grow" }, [titleInput]),
+    ]);
+
+    var slugField = el("div", { class: "field" }, [el("label", { text: "slug" }), slugInput]);
+    var excerptField = el("div", { class: "field" }, [el("label", { text: "excerpt" }), excerpt]);
+
+    var editor = el("div", { class: "editor", "data-pane": state.pane }, [head, slugField, tabs, panes, excerptField]);
+    var main = el("main", {}, [editor, foot]);
+    app.appendChild(main);
+
+    syncPreview();
+    titleInput.focus();
+
+    // warn on tab close with unsaved changes
+    window.onbeforeunload = function () {
+      return state.view === "editor" && state.dirty ? "" : undefined;
+    };
+  }
+
+  /* ---------------- boot ---------------- */
+
+  api("GET", "/me")
+    .then(function (data) {
+      if (data.authenticated) {
+        state.csrf = data.csrf;
+        state.username = data.username;
+        loadList();
+      } else {
+        renderLogin();
+      }
+    })
+    .catch(function () {
+      renderLogin();
+    });
+})();

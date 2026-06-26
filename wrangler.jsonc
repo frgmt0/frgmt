@@ -1,10 +1,26 @@
 {
   "name": "frgmt-xyz",
   "compatibility_date": "2026-06-01",
+  "main": "worker/index.ts",
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // Only these paths reach the Worker; everything else serves the splash directly.
+    "run_worker_first": ["/admin", "/admin/*", "/api/*"]
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "kona-blog-db",
+      "database_id": "e3fe50f3-40ed-4943-85c4-4e5ece3f992a"
+    }
+  ],
+  // Author the admin app as plain html/css/js and import it as text.
+  "rules": [
+    { "type": "Text", "globs": ["**/*.html", "**/*.css", "**/*.txt"], "fallthrough": true }
+  ],
+  "observability": { "enabled": true },
   "routes": [
     { "pattern": "frgmt.xyz/*", "zone_id": "c592eceb292e31c76782683f8fdadec5" },
     { "pattern": "www.frgmt.xyz/*", "zone_id": "c592eceb292e31c76782683f8fdadec5" }
