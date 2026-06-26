@@ -34,6 +34,7 @@ import {
   updatePost,
 } from "./posts";
 import { ADMIN_HTML, ADMIN_CSS, ADMIN_JS } from "./admin";
+import { handleBlog } from "./blog";
 
 const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -74,6 +75,10 @@ export default {
     try {
       if (pathname.startsWith("/api/")) return await handleApi(req, env, url);
       if (pathname === "/admin" || pathname.startsWith("/admin/")) return handleAdmin(pathname);
+      if (pathname === "/blog" || pathname.startsWith("/blog/")) {
+        const res = await handleBlog(req, env, url);
+        if (res) return res;
+      }
     } catch (err) {
       if (err instanceof HttpError) return json({ error: err.message }, err.status);
       console.error("worker error", err);

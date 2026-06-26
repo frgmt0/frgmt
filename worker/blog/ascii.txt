@@ -1,0 +1,70 @@
+/* Decorative generative ascii for the blog masthead — a drifting flow field.
+   Each cell samples a sum of moving sine waves (plus a slow orbiting well), and
+   the value is quantized to a glyph ramp, so organic light/dark blobs flow
+   across the grid forever without repeating on any human timescale. Purely
+   decorative: aria-hidden, paused when offscreen or under reduced-motion. */
+(function () {
+  "use strict";
+  var pre = document.getElementById("ascii");
+  if (!pre) return;
+
+  var RAMP = " .,:;~=+*xX#$@"; // dark -> light
+  var COLS = 34;
+  var ROWS = 15;
+  var ASPECT = 0.5; // terminal cells are ~2:1, squash y so blobs read round
+
+  function frame(t) {
+    // slow orbiting "well" the field bends around
+    var ox = COLS / 2 + Math.cos(t * 0.6) * COLS * 0.28;
+    var oy = ROWS / 2 + Math.sin(t * 0.8) * ROWS * 0.3;
+    var s = "";
+    for (var y = 0; y < ROWS; y++) {
+      for (var x = 0; x < COLS; x++) {
+        var yy = y / ASPECT;
+        var dx = x - ox;
+        var dy = (y - oy) / ASPECT;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        var v =
+          Math.sin(x * 0.28 + t * 1.1) +
+          Math.sin(yy * 0.26 - t * 0.9) +
+          Math.sin((x + yy) * 0.18 + t * 0.7) +
+          Math.sin(dist * 0.42 - t * 1.6) * 1.2;
+        // normalise roughly [-4.2,4.2] -> [0,1]
+        var n = (v + 4.2) / 8.4;
+        if (n < 0) n = 0; else if (n > 1) n = 1;
+        s += RAMP[(n * (RAMP.length - 1)) | 0];
+      }
+      s += "\n";
+    }
+    return s;
+  }
+
+  var t = 0;
+  var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduced) { pre.textContent = frame(2.0); return; }
+
+  var raf = 0, toggle = 0, visible = true;
+
+  function loop() {
+    raf = requestAnimationFrame(loop);
+    toggle ^= 1;
+    if (toggle) return; // ~30fps is plenty
+    t += 0.05;
+    pre.textContent = frame(t);
+  }
+  function start() { if (!raf) raf = requestAnimationFrame(loop); }
+  function stop() { cancelAnimationFrame(raf); raf = 0; }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) stop();
+    else if (visible) start();
+  });
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (es) {
+      visible = es[0].isIntersecting;
+      if (visible && !document.hidden) start(); else stop();
+    });
+    io.observe(pre);
+  }
+  start();
+})();

@@ -43,10 +43,16 @@ A self-hosted CMS lives in the same Worker, backed by the existing
 The splash site is untouched — only `/admin` and `/api/*` are routed to the
 Worker (`run_worker_first`); everything else serves static assets.
 
+- `/blog` — public, server-rendered index + posts (reads `published = 1`).
+  Off-black/paper/red to match the splash; a generative ASCII flow field drifts
+  in the masthead and stays out of the reading column. Works without JS.
 - `/admin` — login + markdown editor (live preview, draft/publish, auto
   slug/excerpt, search, manage existing posts, mobile-friendly). Self-contained,
   no client framework or CDN.
 - `/api/*` — JSON API (auth + posts CRUD).
+
+The blog and admin share one markdown subset; the public side renders it
+server-side (`worker/markdown.ts`, XSS-safe) for speed and SEO.
 
 ### Auth (rolled our own, hardened)
 
