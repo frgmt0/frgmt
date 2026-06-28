@@ -159,7 +159,7 @@ async function handleApi(req: Request, env: Env, url: URL): Promise<Response> {
       .first<{ id: string; password_hash: string }>();
 
     // Always run a verify (real hash or a decoy) to keep timing uniform.
-    const decoy = "pbkdf2$210000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    const decoy = "pbkdf2$100000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     const ok = await verifyPassword(password, user?.password_hash ?? decoy);
 
     if (!user || !ok) {

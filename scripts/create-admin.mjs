@@ -13,7 +13,7 @@ import { pbkdf2Sync, randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import readline from "node:readline";
 
-const ITERS = 210_000;
+const ITERS = 100_000; // must match worker/auth.ts; Workers caps PBKDF2 at 100000
 const DB = "kona-blog-db";
 const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 

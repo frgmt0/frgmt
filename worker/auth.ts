@@ -1,7 +1,8 @@
 /* ============================================================
    Hardened, dependency-free auth for the frgmt CMS.
 
-   - Passwords: PBKDF2-SHA256 (210k iters) + 16-byte random salt, WebCrypto.
+   - Passwords: PBKDF2-SHA256 (100k iters) + 16-byte random salt, WebCrypto.
+     (100k is the Workers runtime ceiling for PBKDF2 iterations.)
    - Sessions: 32 random bytes in a __Host- cookie; only SHA-256(token) is
      stored, so a DB leak can't mint cookies. httpOnly, Secure, SameSite=Strict.
    - CSRF: per-session secret required (constant-time) on every mutating call.
@@ -11,7 +12,7 @@
 
 import type { Env } from "./types";
 
-const PBKDF2_ITERS = 210_000;
+const PBKDF2_ITERS = 100_000; // Workers WebCrypto rejects iterations above 100000
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const COOKIE = "__Host-session";
 
@@ -81,6 +82,9 @@ export async function verifyPassword(password: string, stored: string): Promise<
   if (parts.length !== 4 || parts[0] !== "pbkdf2") return false;
   const iters = parseInt(parts[1], 10);
   if (!Number.isFinite(iters) || iters < 1) return false;
+  // Workers WebCrypto rejects >100k iterations; a stored hash above the ceiling
+  // can never be verified here, so fail cleanly instead of throwing a 500.
+  if (iters > 100_000) return false;
   const salt = unb64(parts[2]);
   const expected = parts[3];
   const got = b64(await pbkdf2(password, salt, iters));

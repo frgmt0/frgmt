@@ -56,7 +56,8 @@ server-side (`worker/markdown.ts`, XSS-safe) for speed and SEO.
 
 ### Auth (rolled our own, hardened)
 
-- Passwords: PBKDF2-SHA256, 210k iterations, 16-byte salt (WebCrypto).
+- Passwords: PBKDF2-SHA256, 100k iterations (the Workers WebCrypto ceiling),
+  16-byte salt.
 - Sessions: 32 random bytes in a `__Host-session` cookie (`HttpOnly`, `Secure`,
   `SameSite=Strict`); only the SHA-256 of the token is stored in D1.
 - CSRF token required on every mutating request; constant-time comparisons.
