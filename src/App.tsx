@@ -379,6 +379,10 @@ export default function App() {
             </div>
           </section>
 
+          <a className={`blog-cta${vis(11) ? " in" : ""}`} href="/blog">
+            read the blog <span aria-hidden="true">→</span>
+          </a>
+
           <nav className={`links${vis(11) ? " in" : ""}`} aria-label="links">
             <a href="https://github.com/frgmt0">github</a>
             <span aria-hidden="true">·</span>
