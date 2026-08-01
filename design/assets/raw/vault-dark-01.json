@@ -1,0 +1,5 @@
+{
+  "prompt": "Keep the object in the reference image exactly: same geometry, same shape, same camera angle and same framing. Change only the lighting and the ground. Now a near-black charcoal background and near-black floor, the plaster object lit by a single low warm raking light from the upper left, deep soft shadow falling to the right, the object reads as pale grey against darkness, moody and quiet, no text, no watermark, no logo, no people, no hands, no gradient background, no vignette",
+  "model": "google/gemini-3-pro-image",
+  "ref": "design/assets/raw/vault-01.png"
+}

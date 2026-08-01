@@ -1,0 +1,15 @@
+{
+  "cmd": "clip",
+  "prompt": "extremely slow dolly in toward the four slots, locked-off framing otherwise, no other movement, light unchanged",
+  "model": "bytedance/seedance-2.0",
+  "duration": 8,
+  "size": "1280x720",
+  "first": "design/assets/raw/vault-01.png",
+  "last": null,
+  "seed": 7,
+  "audio": false,
+  "name": "vault",
+  "out": "design/assets/raw",
+  "poll": 10,
+  "timeout": 1800
+}

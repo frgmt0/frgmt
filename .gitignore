@@ -5,3 +5,4 @@ dist/
 # generated design assets: keep the sidecar json, not the megabytes
 design/assets/raw/*.mp4
 design/assets/raw/*.png
+.gstack/

@@ -1,0 +1,5 @@
+{
+  "prompt": "Match the colour, material and lighting of the reference image exactly. A single tall upright slab standing in front of a receding row of five identical smaller slabs, warm bone cast plaster with a fine matte tooth, unpolished, warm pale bone background and warm bone floor, soft overcast north light from the upper left, no hard shadow, locked-off camera at eye level, no grey, no cool tones, no text, no watermark, no logo, no people, no hands, no gradient background, no vignette",
+  "model": "google/gemini-3-pro-image",
+  "ref": "design/assets/raw/screen-01.png"
+}
