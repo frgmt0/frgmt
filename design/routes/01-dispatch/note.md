@@ -1,0 +1,1 @@
+Cold, dense, mono. Chrome pinned to all four edges with a real UTC clock. Every fact on the page is a labelled readout, including the projects, so the biography and the work are the same object. Each tool proves itself with a real terminal or transcript block rather than a description of one.

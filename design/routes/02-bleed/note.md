@@ -1,0 +1,1 @@
+A printed poster. One screen, no scroll, two inks plus a red. FRGMT is set large enough to exit the page on three sides, and the three projects are hand-set into the negative space the crop leaves behind.

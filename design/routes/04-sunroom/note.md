@@ -1,0 +1,1 @@
+The deliberate anti-tech one. Warm cream, three saturated bands, asymmetric radii. Each band carries a hand-drawn diagram of what that tool actually does, because all three put a barrier between two parties: your Mac against the cloud, you against the fleet, the vault against the agent.

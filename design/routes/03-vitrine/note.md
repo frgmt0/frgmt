@@ -1,0 +1,1 @@
+Museum wall labels. Near-empty paper, one 408px column parked off-centre, the right half of the page permanently void. Everything is 13px except one line. Nothing moves, nothing hovers, no colour at all.

@@ -1,0 +1,1 @@
+The page moves sideways instead of down. A single amber rule runs through every panel so the travel reads as a track, and the marker on it reports real scroll position. Above the rule is the claim, below it is the proof. Arrow buttons and keyboard scrolling both work.

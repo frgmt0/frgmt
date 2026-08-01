@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>frgmt · sidelong</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ground:#0D100E;
+    --ink:#DFE6E0;
+    --dim:#828B84;
+    --amber:#FFB000;
+    --rule:#1E241F;
+    --pad:clamp(18px,2.4vw,34px);
+    --baseline:62%;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden}
+  body{
+    background:var(--ground);color:var(--ink);
+    font:400 16px/1.4 "Barlow Condensed",system-ui,sans-serif;
+  }
+  a{color:inherit;text-decoration:none}
+  a:focus-visible{outline:2px solid var(--amber);outline-offset:4px}
+
+  .top,.bot{
+    position:fixed;left:var(--pad);right:var(--pad);z-index:5;
+    display:flex;justify-content:space-between;align-items:center;gap:1rem;
+    font:500 11px/1 "IBM Plex Mono",ui-monospace,monospace;
+    letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+    pointer-events:none;
+  }
+  .top{top:var(--pad)}
+  .bot{bottom:var(--pad)}
+  .top .mark{
+    font-family:"Barlow Condensed",sans-serif;font-weight:700;font-size:20px;
+    letter-spacing:.16em;color:var(--ink);
+  }
+  .top a,.bot a{pointer-events:auto;border-bottom:1px solid transparent}
+  .top a:hover,.bot a:hover{color:var(--amber);border-bottom-color:var(--amber)}
+
+  /* one rule runs through every panel, so sideways reads as a track */
+  .rail{position:fixed;left:0;right:0;top:var(--baseline);height:1px;background:var(--rule);z-index:1}
+  .rail::after{
+    content:"";position:absolute;left:0;top:-1px;height:3px;width:16vw;
+    background:var(--amber);
+    transform:translateX(var(--progress,0px));
+  }
+
+  .track{
+    height:100%;display:flex;
+    overflow-x:auto;overflow-y:hidden;
+    scroll-snap-type:x mandatory;scrollbar-width:none;
+    position:relative;z-index:2;
+  }
+  .track::-webkit-scrollbar{display:none}
+
+  .panel{
+    flex:0 0 auto;height:100%;
+    width:clamp(320px,40vw,540px);
+    scroll-snap-align:start;
+    padding:0 var(--pad);
+    border-right:1px solid var(--rule);
+    position:relative;
+  }
+  .stack{position:absolute;left:var(--pad);right:var(--pad);bottom:calc(100% - var(--baseline));}
+
+  .no{font:500 11px/1 "IBM Plex Mono",monospace;letter-spacing:.14em;color:var(--amber);display:block;margin-bottom:12px}
+  .panel h2{font-weight:700;font-size:clamp(40px,5vw,72px);line-height:.9;letter-spacing:-.014em;text-transform:uppercase;margin-bottom:12px}
+  .panel h2 a{border-bottom:2px solid transparent}
+  .panel h2 a:hover{color:var(--amber);border-bottom-color:var(--amber)}
+  .panel p{color:var(--dim);max-width:36ch;font-size:17px;line-height:1.36;margin-bottom:16px}
+  .meta{
+    display:flex;flex-wrap:wrap;gap:8px 18px;
+    font:400 11px/1 "IBM Plex Mono",monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+    padding-top:12px;border-top:1px solid var(--rule);
+  }
+  .meta b{color:var(--ink);font-weight:500}
+  .meta a{color:var(--amber);border-bottom:1px solid transparent}
+  .meta a:hover{border-bottom-color:var(--amber)}
+
+  /* below the rail: the one concrete detail per panel */
+  .under{position:absolute;left:var(--pad);right:var(--pad);top:calc(var(--baseline) + 26px)}
+  .under pre{
+    font:400 12px/1.75 "IBM Plex Mono",monospace;color:var(--dim);
+    white-space:pre-wrap;max-width:40ch;
+  }
+  .under pre b{color:var(--ink);font-weight:400}
+  .under pre .g{color:#454C47}
+  .under pre .a{color:var(--amber)}
+
+  .lede{width:clamp(340px,50vw,660px)}
+  .lede h1{font-weight:700;font-size:clamp(46px,7vw,108px);line-height:.88;letter-spacing:-.018em;text-transform:uppercase;margin-bottom:16px}
+  .lede h1 span{color:var(--amber)}
+  .lede p{font-size:clamp(17px,1.5vw,21px);max-width:36ch;color:var(--ink)}
+  .hint{
+    display:flex;align-items:center;gap:10px;
+    font:500 11px/1 "IBM Plex Mono",monospace;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--dim);margin-top:20px;
+  }
+  .hint svg{stroke:var(--amber)}
+
+  .nudge{
+    pointer-events:auto;background:none;border:1px solid var(--rule);color:var(--dim);
+    width:36px;height:27px;cursor:pointer;display:grid;place-items:center;font-size:13px;
+  }
+  .nudge:hover{border-color:var(--amber);color:var(--amber)}
+
+  @media (max-width:760px){
+    .panel,.lede{width:88vw}
+    :root{--baseline:54%}
+    .under pre{font-size:11px}
+  }
+  @media (prefers-reduced-motion:reduce){ .track{scroll-behavior:auto} }
+</style>
+</head>
+<body>
+
+<div class="top">
+  <span class="mark">FRGMT</span>
+  <span>Los Angeles · Kowo Research</span>
+</div>
+
+<div class="rail" aria-hidden="true"></div>
+
+<div class="track" id="track" tabindex="0" aria-label="Projects. Scroll sideways or use the arrow keys.">
+
+  <section class="panel lede">
+    <div class="stack">
+      <h1>Keep the model <span>on its</span> side of the wall.</h1>
+      <p>Three tools that sit between a person and a machine that would otherwise see too much.</p>
+      <div class="hint">
+        <svg width="26" height="8" viewBox="0 0 26 8" fill="none" stroke-width="1.4" aria-hidden="true"><path d="M0 4h24M20 1l4 3-4 3"/></svg>
+        Keep going right
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="stack">
+      <span class="no">/001</span>
+      <h2><a href="https://github.com/frgmt0/typer">Typer</a></h2>
+      <p>On-device autocomplete for macOS. Ghost text at your caret in almost any field, streaming word by word off a small local model. Nothing leaves the Mac.</p>
+      <div class="meta"><span><b>Swift</b></span><span>MIT</span><span>alpha</span><span><a href="https://typr.frgmt.xyz">typr.frgmt.xyz</a></span></div>
+    </div>
+    <div class="under">
+      <pre><b>the meeting is</b> <span class="g">scheduled for thursday</span>
+<span class="a">tab</span>  take a word
+<span class="a">`</span>    take the line</pre>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="stack">
+      <span class="no">/002</span>
+      <h2><a href="https://github.com/kowo-co/beckett">Beckett</a></h2>
+      <p>A Discord-native AI engineer. It sizes the job, opens a numbered task, and hands the branches to a fleet of coding agents in isolated worktrees. One agent talks. The rest build.</p>
+      <div class="meta"><span><b>TypeScript</b></span><span>MIT</span><span>Kowo Research</span></div>
+    </div>
+    <div class="under">
+      <pre><span class="a">@beckett</span> <b>/api/session is 500ing</b>
+<span class="g">──</span> opened <b>#42</b>
+<span class="g">──</span> 42.1 reproduce <span class="g">·</span> 42.2 patch
+<span class="g">──</span> PR <b>#118</b> open</pre>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="stack">
+      <span class="no">/003</span>
+      <h2><a href="https://github.com/kowo-co/jingle-jingle">Jingle</a></h2>
+      <p>A password manager for AI agents that never shows the agent a password. Four ways out: a child process, the clipboard, a TOTP code, or a print you ask for by name.</p>
+      <div class="meta"><span><b>Rust</b></span><span>Apache 2.0</span><span>Kowo Research</span></div>
+    </div>
+    <div class="under">
+      <pre><b>$ jingle exec -s gh=GH_PASS -- ./run.sh</b>
+<b>$ jingle show gh</b>
+password: <span class="a">[REDACTED]</span></pre>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="stack">
+      <span class="no">/end</span>
+      <h2><a href="https://github.com/frgmt0">Github</a></h2>
+      <p>Around sixty more, most of them small. Two toy languages, a chess engine that lost, an ASCII fluid simulation.</p>
+      <div class="meta"><span><a href="https://kcodes.me">kcodes.me</a></span><span>© 2026 frgmt</span></div>
+    </div>
+  </section>
+
+</div>
+
+<div class="bot">
+  <span><a href="https://github.com/frgmt0">github.com/frgmt0</a></span>
+  <span style="display:flex;gap:6px">
+    <button class="nudge" id="prev" aria-label="Previous panel">&larr;</button>
+    <button class="nudge" id="next" aria-label="Next panel">&rarr;</button>
+  </span>
+</div>
+
+<script>
+  const track = document.getElementById("track");
+  const rail = document.querySelector(".rail");
+
+  // the amber marker reports real scroll position along the rail
+  const report = () => {
+    const max = track.scrollWidth - track.clientWidth;
+    const pct = max > 0 ? track.scrollLeft / max : 0;
+    rail.style.setProperty("--progress", (pct * (window.innerWidth * 0.84)) + "px");
+  };
+  track.addEventListener("scroll", report, { passive: true });
+  window.addEventListener("resize", report);
+  report();
+
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const step = () => track.clientWidth * 0.8;
+  const go = (d) => track.scrollBy({ left: d * step(), behavior: reduced ? "auto" : "smooth" });
+  document.getElementById("next").onclick = () => go(1);
+  document.getElementById("prev").onclick = () => go(-1);
+</script>
+</body>
+</html>
