@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { initialTheme, persist, swapTheme, type Theme } from "./theme";
+import Wash from "./Wash";
 
 /**
  * Wall-label layout. One narrow text column parked off-centre, with the objects
@@ -166,6 +167,8 @@ export default function App() {
       data-settling={settling ? "" : undefined}
       data-swapped={swapped ? "" : undefined}
     >
+      <Wash theme={theme} reduced={reduced} />
+
       <a className="skip" href="#main">
         Skip to content
       </a>

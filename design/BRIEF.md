@@ -45,6 +45,21 @@ Risk to watch: Vitrine works *because* the right side is empty. The asset has to
 near-monochrome or it becomes a different, worse route. Reference for doing it well:
 davidwhyte.com in the skill library, a 400px left column against a right void of slow paint.
 
+Two more moves came out of the build, both from the layout rather than added to it:
+
+**The floor plan.** The left gutter exists because Vitrine parks the text off-centre, but on a
+page this tall an empty column that never says where you are is only margin. It now holds a
+sticky index: Now, Work with the three objects under it, Experience, Elsewhere. Same 13px, dim
+until you are standing in that room. Hidden below 900px, where the scroll is short enough that
+repeating the section names would be navigation for its own sake.
+
+**The wash.** An ASCII truchet field behind the whole site, blue-gray with the objects' bone at
+the peaks, drifting on a slow fbm. Same idea as the grain gradient shader on 21st.dev, written
+as characters on a 2D canvas: no dependency, no WebGL, and full control of the palette. Every
+value in it is lighter than the hairlines already on the page, so readability is a property of
+the colours rather than of an opacity someone can nudge later. Frozen under reduced motion,
+paused when the tab is hidden.
+
 ## Deliberately out
 
 - **Myles Allen's email.** A real person's work address, published on a public page, gets
@@ -53,6 +68,9 @@ davidwhyte.com in the skill library, a 400px left column against a right void of
   audience. One link to the archive is enough.
 - No em-dashes, no eyebrow labels, no pills, no cards, no quirky footer.
 
-## Still needed
+## Open
 
-- **Surname.** Asked twice, not yet supplied. The hero cannot be built without it.
+- **Clips or stills in the right column.** Three light clips are generated: 8s, 1280x720, 24fps,
+  2.2 to 3.8MB each, $1.21 a clip. Dark versions would double both. Stills are shipping now at
+  7 to 18KB. The clips are good, but nine megabytes of video is a different page from the one
+  the route describes.

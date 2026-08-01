@@ -65,6 +65,18 @@ a:focus-visible {
   outline-offset: 3px;
 }
 
+/*
+  The wash covers the whole site and sits under everything. Fixed rather than
+  scrolling: the page moves across it, which is what keeps a pattern this slow
+  from turning into a texture that races the text.
+*/
+.wash {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
 .skip {
   position: absolute;
   left: -9999px;
