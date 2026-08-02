@@ -62,6 +62,7 @@ const WORK: Work[] = [
  */
 const RAIL = [
   { id: "now", label: "Now" },
+  { id: "blog", label: "Blog", href: "/blog" },
   { id: "work", label: "Work", head: true },
   { id: "typer", label: "Typer", sub: true },
   { id: "beckett", label: "Beckett", sub: true },
@@ -130,7 +131,9 @@ export default function App() {
   const [swapped, setSwapped] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
   // the Work label is a heading, not a place, so it is not in the running
-  const active = useActiveSection(RAIL.filter((r) => !("head" in r)).map((r) => r.id));
+  const active = useActiveSection(
+    RAIL.filter((r) => !("head" in r) && !("href" in r)).map((r) => r.id),
+  );
 
   useEffect(() => {
     const t = initialTheme();
@@ -181,6 +184,8 @@ export default function App() {
             <li key={r.id} className={"sub" in r ? "sub" : undefined}>
               {"head" in r ? (
                 <span className="room">{r.label}</span>
+              ) : "href" in r ? (
+                <a href={r.href}>{r.label}</a>
               ) : (
                 <a
                   href={`#${r.id}`}
@@ -272,6 +277,8 @@ export default function App() {
         <section id="elsewhere">
           <h2 className="key">Elsewhere</h2>
           <p>
+            <a href="/blog">blog</a>
+            <br />
             <a href="https://github.com/frgmt0">github.com/frgmt0</a>
             <br />
             <a href="https://kcodes.me">kcodes.me</a>

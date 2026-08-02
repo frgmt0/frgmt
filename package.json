@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bunx --bun vite --host 0.0.0.0",
+    "dev:api": "bunx --bun wrangler dev",
     "build": "bunx --bun vite build",
     "preview": "bunx --bun vite preview --host 0.0.0.0",
     "check": "bunx --bun tsc --noEmit"
@@ -18,5 +19,7 @@
     "typescript": "latest",
     "vite": "latest"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1"
+  }
 }

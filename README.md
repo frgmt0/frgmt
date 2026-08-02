@@ -26,6 +26,25 @@ Open the local Vite URL, usually `http://localhost:5173`.
 The page renders from a bundled GitHub snapshot first, then refreshes live from
 the GitHub API (`github.com/frgmt0`) in the browser.
 
+## Blog + admin
+
+`/blog` lists posts from the `kona-blog-db` D1 database (newest first, the
+latest one set large). `/admin` is the desk: sign in against `admin_users`
+(PBKDF2), a 30-day session cookie keeps you signed in per device, and the
+editor writes markdown with a live preview. All API traffic is `/api/*` in
+`worker/index.ts`; mutations need the session cookie plus the per-session
+`x-csrf` header, and logins are rate-limited per IP via `login_attempts`.
+
+For local API work, run both:
+
+```sh
+bun run dev       # vite, proxies /api to :8787
+bun run dev:api   # wrangler dev on :8787, local D1
+```
+
+The local database is seeded with a throwaway admin (`admin` / `testpass`)
+and three sample posts. Production data is never touched by local dev.
+
 ## Commands
 
 ```sh
@@ -33,4 +52,5 @@ bun run dev      # development server
 bun run check    # TypeScript check
 bun run build    # production build
 bun run preview  # preview production build
+npx wrangler deploy  # ship site + API to frgmt.xyz
 ```
